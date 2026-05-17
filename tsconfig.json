@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "rootDir": "src",
+
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+
+    "strictPropertyInitialization": true,
+    "strictNullChecks": true,
+    "noUncheckedIndexedAccess": false,
+
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "outDir": "./dist",
+    "module": "ES2022",
+    "emitDeclarationOnly": false
+  },
+  "include": ["src/**/*"]
+}

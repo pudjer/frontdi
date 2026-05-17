@@ -1,115 +1,71 @@
-import { ClientRule } from "../CoreApiTypes/ClientRule";
-import { IContext } from "../CoreApiTypes/Common";
-import { Descriptor, FreshArgs, Invalidate, NecessaryArgs, Resolver } from "../CoreApiTypes/Resolver";
-import { WeakObjectStore } from "./ObjectStore/WeakObjectStore";
+import { type ClientRule } from "../CoreApiTypes/ClientRule";
+import { type IContext } from "../CoreApiTypes/Common";
+import { type RefreshArgs, type ResolveArgs, type Resolver } from "../CoreApiTypes/Resolver";
+import { ContextImpl } from "./ContextImpl";
+import { DescriptorImpl } from "./DescriptorImpl";
+import { type WeakObjectStore } from "./ObjectStore/WeakObjectStore";
 import { WeakObjectStoreSerializableKey } from "./ObjectStore/WeakObjectStoreSerializableKey";
-import { IterableWeakSet } from "./WeakDataStructures/WeakSetIterable";
 
 
-class DescriptorImpl<T> implements Descriptor<T>{
+
+export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, DATA, T> {
   constructor(
-    public readonly invalidate: Invalidate,
-    public readonly res: Promise<T>,
-    public readonly invalidated: Promise<T>,  
-  ){}
-}
-
-
-
-export class DepsContext implements IContext{
-  readonly _context = true as const;
-  private readonly _depscontext = true as const //for type checking
-  private readonly visited: IterableWeakSet<DescriptorImpl<unknown>>
-
-  constructor(
-    visited?: IterableWeakSet<DescriptorImpl<unknown>>,
-  ){
-    this.visited = new IterableWeakSet(visited)
-  }
-
-  copyWithVisited(): DepsContext {
-    return new DepsContext(this.visited)
-  }
-
-  handleNode(descriptor: DescriptorImpl<unknown>): void {
-    this.assertNoCycle(descriptor)
-    this.visited.add(descriptor)
-  }
-
-  assertNoCycle(descriptor: DescriptorImpl<unknown>): void {
-    if(this.visited.has(descriptor)) throw new Error("cycle detected")
-  }
-}
-
-
-
-export class RuleWrapper<KEY, T extends object, DATA> implements Resolver<KEY, T, DATA> {
-  private _gcFixMap = new WeakMap<object, DescriptorImpl<T>>() //keep reference to descriptor if object is alive
-  constructor(
-    private rule: ClientRule<KEY, T, DATA>,
+    private rule: ClientRule<KEY, DATA, T>,
     private cache: WeakObjectStore<KEY, DescriptorImpl<T>> = new WeakObjectStoreSerializableKey<KEY, DescriptorImpl<T>>()
   ) {}
 
 
-  maybeOld = (args: NecessaryArgs<KEY>): DescriptorImpl<T> => {
-    const { key, ctx } = args
+  resolve = (args: ResolveArgs<KEY, DATA>): DescriptorImpl<T> => {
+    const { key, ctx: mbCtx } = args
+    const ctx = mbCtx || new ContextImpl()
     if(!this.typeCheckContext(ctx)) throw new Error("invalid context")
     const descriptor = this.cache.get(key)
 
-    const newCtx = ctx.copyWithVisited()
+    const newCtx = ctx.copy()
     const res = descriptor || this.build({...args, ctx: newCtx})
-    newCtx.handleNode(res)
+    newCtx.next(res as DescriptorImpl<unknown>)
 
     return res
   }
 
-  fresh = (args: FreshArgs<KEY, DATA>): DescriptorImpl<T> => {
-    const { key, ctx } = args
-    if(!this.typeCheckContext(ctx)) throw new Error("invalid context")
+  refresh = (args: RefreshArgs<KEY, DATA>): DescriptorImpl<T> => {
+    const { key } = args
     const descriptor = this.cache.get(key)
 
     if(descriptor) {
-      ctx.assertNoCycle(descriptor)
       descriptor.invalidate()
     }
 
-    const newCtx = ctx.copyWithVisited()
-    const res = this.build({...args, ctx: newCtx})
-    newCtx.handleNode(res)
+    const ctx = new ContextImpl()
+    const res = this.build({...args, ctx})
+    ctx.next(res as DescriptorImpl<unknown>)
 
     return res
   }
 
-  private typeCheckContext(ctx: IContext): ctx is DepsContext{
+  private typeCheckContext(ctx: IContext): ctx is ContextImpl{
     return "_depscontext" in ctx
   }
 
 
+  private readonly refs = new WeakMap<object, object>()
+  private makeRef(obj1: object, obj2: object){ this.refs.set(obj1, obj2); this.refs.set(obj2, obj1) }
 
-
-  private build(args: FreshArgs<KEY, DATA>): DescriptorImpl<T> {
+  private build(args: ResolveArgs<KEY, DATA> & { ctx: ContextImpl }): DescriptorImpl<T> {
     const { key, data, ctx } = args;
 
-    const { promise: invalidated, resolve: resolveInvalidated, reject: rejectInvalidated } = promiseWithResolvers<T>()
     const { promise: target, resolve: resolveTarget, reject: rejectTarget } = promiseWithResolvers<T>()
 
 
-    let alreadyInvalidated = false
-    const invalidate: Invalidate = () => {
-      if(alreadyInvalidated) return
-      alreadyInvalidated = true
+    const descriptor = new DescriptorImpl(target, () => {
+      const cached = this.cache.get(key)
+      if(cached === descriptor) this.cache.delete(key)
+    })
+ 
 
-      target.then(resolveInvalidated).catch(rejectInvalidated)
-
-      if(this.cache.get(key) === descriptor){
-        this.cache.delete(key)
-      }
-    }
-
-    const descriptor = new DescriptorImpl(invalidate, target, invalidated)
 
     const resolveTargetAndBind = (target: T) => {
-      this._gcFixMap.set(target, descriptor)
+      this.makeRef(target, descriptor)
       resolveTarget(target)
     }
 
@@ -145,7 +101,7 @@ export class RuleWrapper<KEY, T extends object, DATA> implements Resolver<KEY, T
 
 
 
-function promiseWithResolvers<T>(): {
+export function promiseWithResolvers<T>(): {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
   reject: (reason?: any) => void;

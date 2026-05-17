@@ -1,5 +1,5 @@
 import { WeakMapReverse } from "../WeakDataStructures/WeakMapReverse";
-import { WeakObjectStore } from "./WeakObjectStore";
+import type { WeakObjectStore } from "./WeakObjectStore";
 export interface KeySerializer<KEY, SRLZD> {
 	serialize(key: KEY): SRLZD
 }
@@ -26,6 +26,7 @@ export class WeakObjectStoreSerializableKey<KEY, T extends object> implements We
 	}
 	set(key: KEY, value: T): void {
 		const serializedKey = this.keySerializer.serialize(key)
+		if (this.weakMapReverse.has(serializedKey)) throw new Error("Key already exists")
 		this.weakMapReverse.set(serializedKey, value)
 	}
 	delete(key: KEY): void {

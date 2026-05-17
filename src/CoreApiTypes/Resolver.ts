@@ -1,10 +1,13 @@
-import { IContext } from "./Common"
+import type { IContext } from "./Common"
 
-export interface NecessaryArgs<KEY> {
-  ctx: IContext
+
+export type RefreshArgs<KEY, DATA> = {
   key: KEY
+  data?: DATA
 }
-export type FreshArgs<KEY, DATA> = NecessaryArgs<KEY> & { data?: DATA }
+export type ResolveArgs<KEY, DATA> = { 
+  ctx?: IContext
+} & RefreshArgs<KEY, DATA>
 
 export type Invalidate = ()=>void
 export interface Descriptor<T> {
@@ -13,7 +16,7 @@ export interface Descriptor<T> {
   invalidate: Invalidate
 }
 
-export interface Resolver<KEY, T extends object, DATA> {
-  fresh(args: FreshArgs<KEY, DATA>): Descriptor<T>; //invokes invalidate(), then builds
-  maybeOld(args: NecessaryArgs<KEY>): Descriptor<T>;
+export interface Resolver<KEY, DATA, T extends object> {
+  refresh(args: RefreshArgs<KEY, DATA>): Descriptor<T>;
+  resolve(args: ResolveArgs<KEY, DATA>): Descriptor<T>;
 }
