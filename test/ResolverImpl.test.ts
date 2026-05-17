@@ -162,7 +162,9 @@ describe('ResolverImpl', () => {
       },
     });
     
-    await expect(cyclicResolver.resolve({ key: 1 }).res).rejects.toThrow(/Cycle detected/i);
+    const desc = cyclicResolver.resolve({ key: 1 })
+    await expect(desc.res).rejects.toThrow(/Cycle detected/i);
+    await expect(desc.invalidated).rejects.toThrow(/Cycle detected/i);
     await new Promise((resolve) => setTimeout(resolve, 4000));
   });
 
