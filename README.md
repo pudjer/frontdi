@@ -1,31 +1,70 @@
 # frontdi
 
-**Dependency resolution library** with:
+> **Deterministic dependency resolution with shared object identity, cascading invalidation, and runtime cycle detection**
 
+`frontdi` is a lightweight dependency-resolution library for building **stable object graphs** from async data sources.
 
-- ✅ Weakly-cached shared objects by Rule - Key
-- ✅ `fetch()` + `build()` rule based
-- ✅ Cascading cache invalidation for dependent resolvers
-- ✅ Runtime cycle detection
-- ✅ Support for resolving from provided `data` (no `fetch`)
+It gives you:
 
----
-
-## What it is
-
-You define a *resolver rule* (how to `fetch` data and/or how to `build` a final value). Then you create a resolver instance via `createResolver(...)`.
-
-A resolver returns a **Descriptor**:
-
-- `descriptor.res: Promise<T>` — the built value
-- `descriptor.invalidated: Promise<T>` — resolves after the descriptor is invalidated(after build)
-- `descriptor.invalidate()` — manually invalidates the descriptor and cascades to dependents
-
-Resolvers track dependencies during `build()` using a `ctx` context object. When you call `refresh()`, the cached descriptor is invalidated and dependents are invalidated as well.
+* ♻️ **Shared object instances by key**
+* ⚡ **Weakly-cached descriptors**
+* 🧠 **Automatic dependency graph tracking**
+* 🔄 **Cascading invalidation**
+* 🚫 **Runtime cycle detection**
+* 🧩 **Composable async resolvers**
+* 📦 **JSON-serializable keys**
+* 🛠 `fetch()` + `build()` pipeline
+* 🧪 Works with provided `data` without calling `fetch`
 
 ---
 
-## Install
+# Why it matters
+
+The core idea of `frontdi`:
+
+## **As long as an object is not invalidated — the exact same instance is returned everywhere**
+
+If two parts of your app resolve:
+
+```ts
+userResolver.resolve({ key: 1 })
+```
+
+they receive the **same descriptor** and eventually the **same object reference**.
+
+That means:
+
+* identity consistency
+* shared mutations
+* memoization-friendly behavior
+* stable references for UI/state systems
+* no accidental duplicate entities
+
+```ts
+const aDesc = userResolver.resolve({ key: 1 })
+const a = await a.res;
+const b = await userResolver.resolve({ key: 1 }).res;
+
+console.log(a === b); // true
+```
+
+After invalidation:
+
+```ts
+await userResolver.refresh({ key: 1 }).res;
+
+const c = await userResolver.resolve({ key: 1 }).res; //always invalidates previous value on key
+//or
+aDesc.invalidate() //invalidates only this descriptor if it is an actual descriptor
+
+console.log(c === a); // false
+```
+
+This makes `frontdi` behave closer to an **identity map + dependency graph** than a simple async cache.
+
+---
+
+# Installation
 
 ```bash
 npm i frontdi
@@ -33,62 +72,195 @@ npm i frontdi
 
 ---
 
-## Quick start
+# Quick Example
 
 ```ts
 import { createResolver } from 'frontdi';
 
 type Key = number;
-//type Key = {left: number, right: number}
-//type Key = {parent: {child: ...}}
 
-export interface User {
+interface UserData {
   id: number;
   username: string;
-  address: Address;
-  company: Company;
+  address: AddressData;
 }
-//class ComplexEntity{ constructor(...) }
 
+class User{
+  constructor(
+    public id: number,
+    public username: string,
+    public address: Address,
+    public company: Company
+  ){}
+}
 
-const userResolver = createResolver<Key, User, User>({
+const userResolver = createResolver<Key, UserData, User>({
   fetch: getUser,
-  build: async ({data: user, ctx, key, self: {invalidated}}) => {
-    //do not await values from self
 
-    const company = companyResolver.resolve({ key: key, data: user.company, ctx });
-    user.company = await company.res;
+  build: async ({ data: user, ctx, key, self }) => {
+    // resolve dependencies using the SAME ctx
 
-    const address = addressResolver.resolve({ key: key, data: user.address, ctx });
-    user.address = await address.res;
-
-    invalidated.then(() => {
-      //resolvse strictly after build
-      //some cleanup
+    const company = companyResolver.resolve({
+      key,
+      ctx, //just always pass it if you can
     });
 
+    const address = addressResolver.resolve({
+      key,
+      data: user.address, // data is only used when creating a new descriptor.
+      ctx,                // If the descriptor already exists in cache for the same key, cached state wins and provided data is ignored.    
+    });
+
+    user.company = await company.res;
+    user.address = await address.res;
+
+    self.invalidated.then(() => { // resolves strictly after build + invalidation; do not await self.invalidated/self.res inside build (deadlock)
+      // cleanup logic
+      // subscriptions
+      // dispose resources
+    });
 
     return user;
-    // return new User(company, address, ...)
   },
 });
 
 const user = await userResolver.resolve({ key: 1 }).res;
-userResolver.resolve({ key: 1 }).invalidated.then(u=>{console.log(u===user)})
+
 const same = await userResolver.resolve({ key: 1 }).res;
-console.log(user===same)
-const desc = userResolver.refresh({ key: 1 })
-desc.invalidated.then(u=>{console.log(u!==user)})
-const notSame = await userResolver.resolve({ key: 1 }).res;
-console.log(notSame!==same)
-desc.invalidate()
+
+console.log(user === same); // true
+
+userResolver.refresh({ key: 1 });
+
+const updated = await userResolver.resolve({ key: 1 }).res;
+
+console.log(updated === user); // false
 ```
 
 ---
 
-## API
+# Resolver lifecycle
 
-### `createResolver(rule)`
+Each resolver produces a **Descriptor**:
+
+```ts
+type Descriptor<T> = {
+  res: Promise<T>;
+  invalidated: Promise<T>;
+  invalidate(): void;
+}
+```
+
+## `descriptor.res`
+
+Resolves to the built object.
+
+---
+
+## `descriptor.invalidated`
+
+Resolves AFTER the descriptor is invalidated.
+
+Useful for:
+
+* cleanup
+* unsubscribing
+* cache disposal
+* reactive systems
+* lifecycle hooks
+
+```ts
+descriptor.invalidated.then((value) => {
+  console.log('invalidated', value);
+});
+```
+
+---
+
+## `descriptor.invalidate()`
+
+Manually invalidates the descriptor and cascades invalidation to dependents.
+
+```ts
+descriptor.invalidate();
+```
+
+---
+
+# Key system
+
+## Keys can be ANY JSON-serializable object
+
+Examples:
+
+```ts
+type Key = number;
+
+type Key = {
+  left: number;
+  right: number;
+};
+
+type Key = {
+  userId: number;
+  filters: {
+    active: boolean;
+    page: number;
+  };
+};
+```
+
+Internally, keys are normalized deterministically.
+
+That means:
+
+```ts
+{ a: 1, b: 2 }
+```
+
+and
+
+```ts
+{ b: 2, a: 1 }
+```
+
+produce the same cache identity.
+
+---
+
+## Important recommendation for arrays
+
+If array order is NOT semantically important:
+
+```ts
+['b', 'a']
+```
+
+vs
+
+```ts
+['a', 'b']
+```
+
+should ideally be sorted before resolving.
+
+Example:
+
+```ts
+const tags = [...inputTags].sort();
+
+resolver.resolve({
+  key: { tags }
+});
+```
+
+Otherwise they are treated as different keys.
+
+---
+
+# API
+
+## `createResolver(rule)`
 
 ```ts
 function createResolver<KEY, DATA, T extends object>(
@@ -96,122 +268,271 @@ function createResolver<KEY, DATA, T extends object>(
 ): Resolver<KEY, DATA, T>
 ```
 
-Where `ClientRule` is:
+---
+
+## Rule definition
 
 ```ts
 type ClientRule<KEY, DATA, T extends object> = {
   fetch: (key: KEY) => Promise<DATA> | DATA;
-  build: (info: BuildInfo<KEY, DATA, T>) => Promise<T> | T;
+
+  build: (
+    info: BuildInfo<KEY, DATA, T>
+  ) => Promise<T> | T;
 };
 ```
 
-### `resolver.resolve(args)`
+---
+
+# `resolve(args)`
 
 ```ts
 resolve(args: ResolveArgs<KEY, DATA>): Descriptor<T>
 ```
 
-`ResolveArgs`:
-
 ```ts
-type ResolveArgs<KEY, DATA> = { ctx?: IContext } & { key: KEY; data?: DATA };
+type ResolveArgs<KEY, DATA> = {
+  key: KEY;
+  data?: DATA;
+  ctx?: IContext;
+};
 ```
 
-Behavior:
+---
 
-- If `args.data` is provided → `build()` runs using that data and **`fetch()` is not called**.
-- Otherwise → `fetch(key)` runs, then `build()`.
-- If you use it inside other `build()` you need to pass ctx from arguments of your build to parameters of resolve.
+## Behavior
 
-### `resolver.refresh({ key })`
+### With `data`
+
+```ts
+resolver.resolve({
+  key,
+  data
+});
+```
+
+* `fetch()` is skipped
+* `build()` runs using provided data
+
+---
+
+### Without `data`
+
+```ts
+resolver.resolve({
+  key
+});
+```
+
+Flow:
+
+```txt
+fetch(key)
+   ↓
+build(...)
+   ↓
+cached descriptor
+```
+
+---
+
+# Dependency tracking
+
+Resolvers automatically build a dependency graph through shared `ctx`.
+
+```ts
+const user = userResolver.resolve({ key, ctx });
+
+const posts = postsResolver.resolve({ key, ctx });
+```
+
+Dependencies are recorded during `build()`.
+
+This enables:
+
+* cascading invalidation
+* cycle detection
+* dependency-aware refreshes
+
+---
+
+# Cascading invalidation
+
+If:
+
+```txt
+User -> Company -> Address
+```
+
+and `Company` is invalidated:
+
+```ts
+companyResolver.refresh({ key });
+```
+
+then dependent `User` descriptors are invalidated automatically.
+
+This guarantees graph consistency.
+
+---
+
+# Cycle detection
+
+`frontdi` detects:
+
+## Self-reference
+
+```txt
+A -> A
+```
+
+## Dependency cycles
+
+```txt
+A -> B -> A
+```
+
+In those cases:
+
+```ts
+await resolver.resolve(...).res;
+```
+
+rejects with:
+
+```txt
+Cycle detected
+```
+
+---
+
+# Cache semantics
+
+## Cached by resolver + normalized key
+
+Repeated calls:
+
+```ts
+resolver.resolve({ key })
+```
+
+return the SAME descriptor instance until invalidation.
+
+```ts
+const d1 = resolver.resolve({ key: 1 });
+const d2 = resolver.resolve({ key: 1 });
+
+console.log(d1 === d2); // true
+```
+
+---
+
+# Refresh
+
+## `refresh(args)`
 
 ```ts
 refresh(args: RefreshArgs<KEY, DATA>): Descriptor<T>
 ```
 
-`RefreshArgs`:
-
 ```ts
-type RefreshArgs<KEY, DATA> = { key: KEY; data?: DATA };
+type RefreshArgs<KEY, DATA> = {
+  key: KEY;
+  data?: DATA;
+};
 ```
 
 Behavior:
 
-- Invalidates value of descriptor and deletes it from cache if it is an actual value
-- Cascades invalidation to dependents
-- You should not use it inside your `build()`
-
-> Note: `refresh()` creates a new build context internally.
-
----
-
-## Dependency graph & cycle detection
-
-During `build()`, you may call other resolvers using the same `ctx`. This library uses that context to record dependencies.
-
-It detects:
-
-1. **Self-reference**: resolving the same descriptor while it is being built
-2. **Dependency cycles**: A depends on B, B depends on A
-
-In those cases, `resolve(...).res` rejects with an error containing `Cycle detected`.
-
----
-
-## Example: composing a graph (based on tests)
-
-The tests in `test/ResolverImpl.test.ts` build a small graph:
-
-- `geoResolver` builds `Geo`
-- `addressResolver` resolves `geo` inside `build()`
-- `companyResolver` builds `Company`
-- `userResolver` resolves `company` + `address` inside `build()`
-- `postsResolver` builds `Post[]`
-- `commentsResolver` builds `Comment[]`
-
-Key idea: **pass through `ctx`** when resolving dependencies.
-
----
-
-## Testing notes (from `ResolverImpl` test)
-
-### 1) Integration: full graph resolution
-
-`test/jsonplaceholder/jsonplaceholderApi.ts` is used as a realistic external data source.
-
-### 2) Caching: same key returns the same descriptor
-
-The resolver caches descriptors by key in a weak object store. Repeated `resolve({ key })` returns the cached descriptor instance.
-
-### 3) `build()` supports provided `data`
-
-If you call:
+* invalidates cached descriptor by key
+* removes it from cache
+* cascades invalidation to dependents
+* creates a new build context internally
 
 ```ts
-resolver.resolve({ key, data })
+await resolver.refresh({ key }).res;
 ```
 
-`fetch(key)` is skipped and `build()` runs with the provided `data`.
+---
 
-### 4) Cycle detection
+# Best practices
 
-The test creates a resolver whose `build()` resolves itself using the same context chain; it must throw with `Cycle detected`.
+## Always pass `ctx` inside `build()`
 
-### 5) Cascade invalidation with `refresh() and desc.invalidate()`
+```ts
+childResolver.resolve({
+  key,
+  ctx,
+});
+```
 
-`refresh({ key })` and `resolve/refresh({ key }).invalidate()` invalidates that node and all recorded dependents.
-You can subscribe on desc.invalidated promise or await it outside of build
+Without shared context, dependency tracking will not work.
 
 ---
 
-## TypeScript tips
+## Prefer deterministic keys
 
-- `T extends object` is required by the current design because descriptors are tracked via object references.
-- Prefer passing `ctx` when composing resolvers to ensure dependency tracking.
+Good:
+
+```ts
+{
+  page: 1,
+  sort: 'desc'
+}
+```
+
+Better with arrays:
+
+```ts
+{
+  tags: [...tags].sort()
+}
+```
 
 ---
 
-## License
+# Example architecture
+
+```txt
+User
+ ├── Company
+ ├── Address
+ │     └── Geo
+ └── Posts
+       └── Comments
+```
+
+Each resolver composes others using shared `ctx`.
+
+`frontdi` tracks the graph automatically.
+
+---
+
+# Use cases
+
+Perfect for:
+
+* frontend entity graphs
+* normalized async stores
+* SDK clients
+* reactive state systems
+* GraphQL-like composition
+* client-side repositories
+* dependency-aware caches
+* identity-mapped data layers
+
+---
+
+# TypeScript notes
+
+```ts
+T extends object
+```
+
+is required because descriptors track object references internally.
+
+---
+
+# License
 
 MIT
-

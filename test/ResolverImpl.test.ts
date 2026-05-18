@@ -83,20 +83,37 @@ function buildGraph() {
 describe('ResolverImpl', () => {
 
   it('jsonplaceholder integration: can resolve a full user graph with dependent resolvers', async () => {
-    const { userResolver, postsResolver, commentsResolver } = buildGraph();
+    const { userResolver, postsResolver, commentsResolver, geoResolver } = buildGraph();
 
+    const geo = await geoResolver.resolve({ key: 1 }).res;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     const user = await userResolver.resolve({ key: 1 }).res;
-    userResolver.resolve({ key: 1 }).invalidated.then(u=>{console.log(u===user)})
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     expect(user.id).toBe(1);
-
+    expect(user.address.geo).toEqual(geo);
+    const user2 = await userResolver.refresh({ key: 1 }).res;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    expect(user2.address.geo).toEqual(geo);
+    expect(user2).not.toBe(user);
+    const geo2 = await geoResolver.refresh({ key: 1 }).res;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    expect(geo2).not.toBe(geo);
+    const user3 = await userResolver.resolve({ key: 1 }).res;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    expect(user3.address.geo).toEqual(geo2);
+    expect(user3).not.toBe(user2);
     const posts = await postsResolver.resolve({ key: user.id }).res;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     expect(posts.length).toBeGreaterThan(0);
 
     const firstPostId = posts[0].id;
     const comments = await commentsResolver.resolve({ key: firstPostId }).res;
-
+    await new Promise((resolve) => setTimeout(resolve, 5000));
     expect(comments.length).toBeGreaterThan(0);
-    await userResolver.refresh({ key: 1 })
+    const user4 = await userResolver.resolve({ key: 1 }).res;
+    expect(user4).toBe(user3);
+  }, {
+    timeout: 50000,
   });
 
   it('resolve(): returns built value and caches descriptor for the same key', async () => {
