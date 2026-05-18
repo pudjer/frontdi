@@ -100,19 +100,17 @@ const userResolver = createResolver<Key, UserData, User>({
   build: async ({ data: user, ctx, key, self }) => {
     // resolve dependencies using the SAME ctx
 
-    const company = companyResolver.resolve({
+    const company = await companyResolver.resolve({
       key,
       ctx, //just always pass it if you can
-    });
+    }).res;
 
-    const address = addressResolver.resolve({
+    const address = await addressResolver.resolve({
       key,
       data: user.address, // data is only used when creating a new descriptor.
       ctx,                // If the descriptor already exists in cache for the same key, cached state wins and provided data is ignored.    
-    });
+    }).res;
 
-    user.company = await company.res;
-    user.address = await address.res;
 
     self.invalidated.then(() => { // resolves strictly after build + invalidation; do not await self.invalidated/self.res inside build (deadlock)
       // cleanup logic
@@ -120,7 +118,7 @@ const userResolver = createResolver<Key, UserData, User>({
       // dispose resources
     });
 
-    return user;
+    return new User(user.id, user.username, address, company);
   },
 });
 
