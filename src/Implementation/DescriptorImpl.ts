@@ -11,7 +11,7 @@ export type DepsDescriptor<T extends object> = Descriptor<T> & {
 
 export const createDescriptor = <T extends object>(res: Promise<T>, onInvalidate?: () => void): DepsDescriptor<T> => new DescriptorImpl(res, onInvalidate);
 
-export class DescriptorImpl<T extends object> implements DepsDescriptor<T> {
+class DescriptorImpl<T extends object> implements DepsDescriptor<T> {
   private readonly dependencies = new Set<DepsDescriptor<object>>();
   public readonly dependents = new IterableWeakSet<DepsDescriptor<object>>();
   public readonly invalidated: Promise<T>;
