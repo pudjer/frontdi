@@ -1,6 +1,6 @@
 {
   "name": "frontdi",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "Dependency resolution library with weak shared cached objects and cascade cache invalidation.",
   "license": "MIT",
   "type": "module",
