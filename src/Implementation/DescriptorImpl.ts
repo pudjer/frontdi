@@ -27,6 +27,7 @@ export class DescriptorImpl<T> implements Descriptor<T> {
     this.alreadyInvalidated = true;
     this.dependents.forEach((dep) => dep.invalidate());
     this.res.then(this.resolveInvalidated).catch(this.rejectInvalidated);
+    this.dependencies.clear();
   };
   addDependency(dependecy: DescriptorImpl<unknown>): void {
     this.dependencies.add(dependecy);

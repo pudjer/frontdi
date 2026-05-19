@@ -1,217 +1,314 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Descriptor } from '../src/CoreApiTypes/Resolver';
-import { createResolver } from '../src/index';
+// frontdi.test.ts
+import { describe, it, expect, vi } from 'vitest';
+import { createResolver } from 'frontdi';
 
-import {
-  Address,
-  Company,
-  Comment,
-  Geo,
-  Post,
-  User,
-  fetchUserAddress,
-  fetchUserCompany,
-  fetchUserGeo,
-  getComments,
-  getPosts,
-  getUser,
-} from './jsonplaceholder/jsonplaceholderApi';
+describe('frontdi', () => {
+  it('returns same descriptor for same key', () => {
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
 
-type Key = number;
+    const d1 = resolver.resolve({ key: 1 });
+    const d2 = resolver.resolve({ key: 1 });
 
-function buildGraph() {
-  const geoResolver = createResolver<Key, Geo, Geo>({
-    fetch: fetchUserGeo,
-    build: async (info) => (info.data),
+    expect(d1).toBe(d2);
   });
 
-  const addressResolver = createResolver<Key, Address, Address>({
-    fetch: fetchUserAddress,
-    build: async (info) => {
-      const address = info.data;
-      const geoDesc = geoResolver.resolve({ key: info.key, data: info.data.geo, ctx: info.ctx });
-      // resolve must work with provided data too
-      address.geo = await geoDesc.res;
-      return address;
-    },
+  it('returns same object instance for same key', async () => {
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
+
+    const a = await resolver.resolve({ key: 1 }).res;
+    const b = await resolver.resolve({ key: 1 }).res;
+
+    expect(a).toBe(b);
   });
 
-  const companyResolver = createResolver<Key, Company, Company>({
-    fetch: fetchUserCompany,
-    build: (info) => (info.data),
+  it('refresh creates new instance', async () => {
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
+
+    const a = await resolver.resolve({ key: 1 }).res;
+
+    await resolver.refresh({ key: 1 }).res;
+
+    const b = await resolver.resolve({ key: 1 }).res;
+
+    expect(a).not.toBe(b);
   });
 
-  const userResolver = createResolver<Key, User, User>({
-    fetch: getUser,
-    build: async ({data: user, ctx, key, self: {invalidated}}) => {
-      //do not await values from self
+  it('invalidate() creates new instance', async () => {
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
 
-      const company = companyResolver.resolve({ key: key, data: user.company, ctx });
-      user.company = await company.res;
+    const desc = resolver.resolve({ key: 1 });
 
-      const address = addressResolver.resolve({ key: key, data: user.address, ctx });
-      user.address = await address.res;
+    const a = await desc.res;
 
-      invalidated.then(() => {
-        //resolvse strictly after build
-        //some cleanup
-      });
-      return user;
-    },
+    desc.invalidate();
+
+    const b = await resolver.resolve({ key: 1 }).res;
+
+    expect(a).not.toBe(b);
   });
 
-  const postsResolver = createResolver<Key, Post[], Post[]>({
-    fetch: getPosts,
-    build: (info) => (info.data),
+  it('uses provided data without fetch()', async () => {
+    const fetch = vi.fn();
+
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch,
+      build: ({ data }) => ({ id: data.id }),
+    });
+
+    const obj = await resolver.resolve({
+      key: 1,
+      data: { id: 123 },
+    }).res;
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(obj.id).toBe(123);
   });
 
-  const commentsResolver = createResolver<Key, Comment[], Comment[]>({
-    fetch: getComments,
-    build: (info) => (info.data),
+  it('calls fetch() when data not provided', async () => {
+    const fetch = vi.fn(async (id: number) => ({ id }));
+
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch,
+      build: ({ data }) => ({ id: data.id }),
+    });
+
+    await resolver.resolve({ key: 1 }).res;
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(1);
   });
 
-  return {
-    userResolver,
-    postsResolver,
-    commentsResolver,
-    addressResolver,
-    companyResolver,
-    geoResolver,
-  };
-}
+  it('normalizes object keys deterministically', () => {
+    const resolver = createResolver<
+      { a: number; b: number },
+      { ok: true },
+      { ok: true }
+    >({
+      fetch: async () => ({ ok: true }),
+      build: ({ data }) => ({ ok: data.ok }),
+    });
 
-describe('ResolverImpl', () => {
+    const d1 = resolver.resolve({
+      key: { a: 1, b: 2 },
+    });
 
-  it('jsonplaceholder integration: can resolve a full user graph with dependent resolvers', async () => {
-    const { userResolver, postsResolver, commentsResolver, geoResolver } = buildGraph();
+    const d2 = resolver.resolve({
+      key: { b: 2, a: 1 },
+    });
 
-    const geo = await geoResolver.resolve({ key: 1 }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    const user = await userResolver.resolve({ key: 1 }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    expect(user.id).toBe(1);
-    expect(user.address.geo).toEqual(geo);
-    const user2 = await userResolver.refresh({ key: 1 }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    expect(user2.address.geo).toEqual(geo);
-    expect(user2).not.toBe(user);
-    const geo2 = await geoResolver.refresh({ key: 1 }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    expect(geo2).not.toBe(geo);
-    const user3 = await userResolver.resolve({ key: 1 }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    expect(user3.address.geo).toEqual(geo2);
-    expect(user3).not.toBe(user2);
-    const posts = await postsResolver.resolve({ key: user.id }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    expect(posts.length).toBeGreaterThan(0);
-
-    const firstPostId = posts[0].id;
-    const comments = await commentsResolver.resolve({ key: firstPostId }).res;
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    expect(comments.length).toBeGreaterThan(0);
-    const user4 = await userResolver.resolve({ key: 1 }).res;
-    expect(user4).toBe(user3);
-  }, {
-    timeout: 50000,
+    expect(d1).toBe(d2);
   });
 
-  it('resolve(): returns built value and caches descriptor for the same key', async () => {
-    const { userResolver } = buildGraph();
+  it('does NOT normalize array order', () => {
+    const resolver = createResolver<string[], {}, {}>({
+      fetch: async () => ({}),
+      build: () => ({}),
+    });
 
-    const fetchSpy = vi.spyOn({ getUser }, 'getUser' as any);
-    // vitest spy above is type-noop; instead we verify caching by resolver usage count via wrapper
+    const d1 = resolver.resolve({
+      key: ['a', 'b'],
+    });
 
-    const user1 = await userResolver.resolve({ key: 1 }).res;
-    const user2Desc = userResolver.resolve({ key: 1 });
-    const user2 = await user2Desc.res;
+    const d2 = resolver.resolve({
+      key: ['b', 'a'],
+    });
 
-    expect(user1).toEqual(user2);
-
-    // Same descriptor instance should be returned from cache
-    const user1Desc: Descriptor<User> = userResolver.resolve({ key: 1 });
-    expect((await user1Desc.res).id).toBe(1);
-
-    // Caching: calling resolve again should not trigger invalidation
-    // We can't reliably spy on underlying fetch without wrapping, but we can at least ensure value stays stable.
-    expect(user2.id).toBe(1);
-
-    fetchSpy.mockRestore?.();
+    expect(d1).not.toBe(d2);
   });
 
+  it('cascades invalidation to dependents', async () => {
+    const companyResolver = createResolver<
+      number,
+      { id: number },
+      { id: number }
+    >({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
 
+    const userResolver = createResolver<
+      number,
+      { id: number },
+      { id: number; company: { id: number } }
+    >({
+      fetch: async (id) => ({ id }),
+      build: async ({ data, ctx }) => {
+        const company = await companyResolver.resolve({
+          key: data.id,
+          ctx,
+        }).res;
 
-  it('build(): supports provided `data` without calling fetch', async () => {
-    const { userResolver } = buildGraph();
-
-    // We can't intercept internal fetch easily here; instead we run build with explicit data
-    const data: User = {
-      id: 10,
-      name: 'x',
-      username: 'x',
-      email: 'x',
-      phone: 'x',
-      website: 'x',
-      company: { name: 'c', catchPhrase: 'cp', bs: 'b' },
-      address: {
-        street: 's',
-        suite: 'su',
-        city: 'ci',
-        zipcode: 'z',
-        geo: { lat: '1', lng: '2' },
-      },
-    };
-
-    const userDesc = userResolver.resolve({ key: 10, data });
-    const user = await userDesc.res;
-    expect(user.id).toBe(10);
-    expect(user.name).toBe('x');
-    expect(user.address.geo.lat).toBe('1');
-  });
-
-  it('detects dependency cycles via ContextImpl (throws DependencyCycleError)', async () => {
-    const cyclicResolver = createResolver<Key, { v: number }, { v: number }>({
-      fetch: async () => ({ v: 1 }),
-      build: async (info) => {
-        // Create cycle: inside build of `cyclicResolver`, resolve itself with same ctx chain.
-        await cyclicResolver.resolve({ key: info.key, ctx: info.ctx }).res;
-        return info.data;
+        return {
+          id: data.id,
+          company,
+        };
       },
     });
-    
-    const desc = cyclicResolver.resolve({ key: 1 })
-    await expect(desc.res).rejects.toThrow(/Cycle detected/i);
-    await expect(desc.invalidated).rejects.toThrow(/Cycle detected/i);
-    await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    const user1 = await userResolver.resolve({ key: 1 }).res;
+
+    await companyResolver.refresh({ key: 1 }).res;
+
+    const user2 = await userResolver.resolve({ key: 1 }).res;
+
+    expect(user1).not.toBe(user2);
+    expect(user1.company).not.toBe(user2.company);
   });
 
-  it('refresh(): invalidates cached descriptor and invalidates dependents (cascade)', async () => {
-    await new Promise((resolve) => setTimeout(resolve, 4000));
-    const { userResolver, companyResolver, addressResolver } = buildGraph();
+  it('resolves invalidated promise after invalidation', async () => {
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
 
-    const userDesc1 = userResolver.resolve({ key: 2 });
-    const user1 = await userDesc1.res;
+    const desc = resolver.resolve({ key: 1 });
 
-    // Create dependents by resolving company/address first through user build.
-    // Then refresh user => should invalidate user and its previously built dependencies.
-    await userResolver.refresh({ key: 2 }).res;
+    const invalidated = vi.fn();
 
-    // After refresh, resolving again should produce a new value (not necessarily different, but descriptor should be invalidated)
-    const userDesc2 = userResolver.resolve({ key: 2 });
-    const user2 = await userDesc2.res;
+    desc.invalidated.then(invalidated);
 
-    expect(user2.id).toBe(2);
+    await desc.res;
 
-    // Also ensure that refreshing a dependency invalidates dependent.
-    const addressDesc1 = addressResolver.resolve({ key: 3 });
-    const userDesc = userResolver.resolve({ key: 3 });
-    await Promise.all([addressDesc1.res, userDesc.res]);
+    desc.invalidate();
 
-    const invalidatedPromise = userDesc.invalidated;
-    await companyResolver.refresh({ key: 3 }).res; // refresh dependency chain (company is part of user build)
+    await new Promise((resolve) => setImmediate(resolve));
 
-    // user should get invalidated; invalidated resolves with the current descriptor value type
-    await expect(invalidatedPromise).resolves.toMatchObject({ id: 3 });
+    expect(invalidated).toHaveBeenCalledTimes(1);
+  });
+
+  it('detects self-cycle', async () => {
+    const resolver = createResolver<number, {}, {}>({
+      fetch: async () => ({}),
+
+      build: async ({ ctx }) => {
+        await resolver.resolve({
+          key: 1,
+          ctx,
+        }).res;
+
+        return {};
+      },
+    });
+
+    const desc = resolver.resolve({ key: 1 });
+    await expect(desc.res).rejects.toThrow(/cycle/i);
+    await expect(desc.invalidated).rejects.toThrow(/cycle/i);
+  });
+
+  it('detects dependency cycles', async () => {
+    const resolverA = createResolver<number, {}, {}>({
+      fetch: async () => ({}),
+
+      build: async ({ ctx }) => {
+        await resolverB.resolve({
+          key: 1,
+          ctx,
+        }).res;
+
+        return {};
+      },
+    });
+
+    const resolverB = createResolver<number, {}, {}>({
+      fetch: async () => ({}),
+
+      build: async ({ ctx }) => {
+        await resolverA.resolve({
+          key: 1,
+          ctx,
+        }).res;
+
+        return {};
+      },
+    });
+
+    const desc = resolverA.resolve({ key: 1 });
+    const desc2 = resolverB.resolve({ key: 1 });
+    await expect(desc.res).rejects.toThrow(/cycle/i);
+    await expect(desc.invalidated).rejects.toThrow(/cycle/i);
+
+    await expect(desc2.res).rejects.toThrow(/cycle/i);
+    await expect(desc2.invalidated).rejects.toThrow(/cycle/i);
+  });
+
+  it('does not rebuild while cached', async () => {
+    const build = vi.fn(({ data }) => ({
+      id: data.id,
+    }));
+
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build,
+    });
+
+    await resolver.resolve({ key: 1 }).res;
+    await resolver.resolve({ key: 1 }).res;
+    await resolver.resolve({ key: 1 }).res;
+
+    expect(build).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds after refresh', async () => {
+    const build = vi.fn(({ data }) => ({
+      id: data.id,
+    }));
+
+    const resolver = createResolver<number, { id: number }, { id: number }>({
+      fetch: async (id) => ({ id }),
+      build,
+    });
+
+    await resolver.resolve({ key: 1 }).res;
+
+    await resolver.refresh({ key: 1 }).res;
+
+    await resolver.resolve({ key: 1 }).res;
+
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares nested dependency instances', async () => {
+    const addressResolver = createResolver<
+      number,
+      { id: number },
+      { id: number }
+    >({
+      fetch: async (id) => ({ id }),
+      build: ({ data }) => ({ id: data.id }),
+    });
+
+    const userResolver = createResolver<
+      number,
+      { id: number },
+      { address: { id: number } }
+    >({
+      fetch: async (id) => ({ id }),
+
+      build: async ({ data, ctx }) => {
+        const address = await addressResolver.resolve({
+          key: data.id,
+          ctx,
+        }).res;
+
+        return { address };
+      },
+    });
+
+    const u1 = await userResolver.resolve({ key: 1 }).res;
+    const u2 = await userResolver.resolve({ key: 1 }).res;
+
+    expect(u1.address).toBe(u2.address);
   });
 });
-
