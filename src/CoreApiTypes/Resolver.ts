@@ -14,6 +14,7 @@ export interface Descriptor<T> {
   res: Promise<T>
   invalidated: Promise<T>
   invalidate: Invalidate
+  garbageCollected: Promise<void>,
 }
 
 export interface Resolver<KEY, DATA, T extends object> {

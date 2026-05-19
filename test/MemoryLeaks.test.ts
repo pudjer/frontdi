@@ -361,9 +361,256 @@ describe('frontdi memory semantics', () => {
     expect(true).toBe(true);
   });
 
+
+  it('object gets garbage collected without invalidate()', async () => {
+    const resolver = createResolver<
+      number,
+      number,
+      { value: number }
+    >({
+      fetch: async (id) => id,
+      build: ({ data }) => ({ value: data }),
+    });
+
+    let desc = resolver.resolve({ key: 1 });
+    let obj = await desc.res;
+
+    const gcPromise = desc.garbageCollected;
+
+    desc = null as any;
+    obj = null as any;
+
+    await forceGC();
+
+    await gcPromise;
+  });
+
+
+  it('dependency graph survives dependency gc', async () => {
+    let rootInvalidated = false;
+
+    const depResolver = createResolver<
+      number,
+      number,
+      { value: number }
+    >({
+      fetch: async (id) => id,
+      build: ({ data }) => ({ value: data }),
+    });
+
+    const rootResolver = createResolver<
+      number,
+      null,
+      { result: number }
+    >({
+      fetch: async () => null,
+
+      build: async ({ ctx, self }) => {
+        const dep = await depResolver.resolve({
+          key: 1,
+          ctx,
+        }).res;
+
+        self.invalidated.then(() => {
+          rootInvalidated = true;
+        });
+
+        return {
+          result: dep.value + 1,
+        };
+      },
+    });
+
+    let depDesc = depResolver.resolve({ key: 1 });
+    let dep = await depDesc.res;
+
+    const root = await rootResolver.resolve({ key: 1 }).res;
+
+    dep = null as any;
+    depDesc = null as any;
+    
+    await forceGC();
+    
+    depResolver.refresh({ key: 1 });
+    
+    await tick();
+
+    expect(rootInvalidated).toBe(true);
+  });
+
+  it('root object can gc while dependency stays strongly reachable', async () => {
+    const depResolver = createResolver<
+      number,
+      number,
+      { value: number }
+    >({
+      fetch: async (id) => id,
+      build: ({ data }) => ({ value: data }),
+    });
+
+    const rootResolver = createResolver<
+      number,
+      null,
+      { dep: number }
+    >({
+      fetch: async () => null,
+
+      build: async ({ ctx }) => {
+        const dep = await depResolver.resolve({
+          key: 1,
+          ctx,
+        }).res;
+
+        return {
+          dep: dep.value,
+        };
+      },
+    });
+
+    const dep = await depResolver.resolve({
+      key: 1,
+    }).res;
+
+    let rootDesc = rootResolver.resolve({
+      key: 1,
+    });
+
+    let root = await rootDesc.res;
+    const gcPromise = rootDesc.garbageCollected;
+
+    root = null as any;
+    rootDesc = null as any;
+
+    await forceGC();
+
+    await gcPromise;
+
+
+    expect(dep.value).toBe(1);
+  });
+
+  it('dependency strongly held does not retain parent', async () => {
+    const childResolver = createResolver<
+      number,
+      number,
+      { value: number }
+    >({
+      fetch: async (id) => id,
+      build: ({ data }) => ({ value: data }),
+    });
+
+    const parentResolver = createResolver<
+      number,
+      null,
+      { computed: number }
+    >({
+      fetch: async () => null,
+
+      build: async ({ ctx }) => {
+        const child = await childResolver.resolve({
+          key: 1,
+          ctx,
+        }).res;
+
+        return {
+          computed: child.value * 2,
+        };
+      },
+    });
+
+    const child = await childResolver.resolve({
+      key: 1,
+    }).res;
+
+    let parentDesc = parentResolver.resolve({
+      key: 1,
+    });
+
+    let parent = await parentDesc.res;
+    const gcPromise = parentDesc.garbageCollected;
+
+    expect(child.value).toBe(1);
+
+    parent = null as any;
+    parentDesc = null as any;
+
+    await forceGC();
+
+    await gcPromise;
+
+  });
+
+  it('invalidated promise does not retain object', async () => {
+    const resolver = createResolver<
+      number,
+      number,
+      { value: number }
+    >({
+      fetch: async (id) => id,
+
+      build: ({ data, self }) => {
+        self.invalidated.then(() => {});
+
+        return {
+          value: data,
+        };
+      },
+    });
+
+    let desc = resolver.resolve({ key: 1 });
+    let obj = await desc.res;
+    const gcPromise = desc.garbageCollected;
+
+    obj = null as any;
+    desc = null as any;
+
+    await forceGC();
+
+    await gcPromise;
+
+  });
+
+
+  it('many transient resolves do not accumulate permanently', async () => {
+    const resolver = createResolver<
+      number,
+      number,
+      { value: number }
+    >({
+      fetch: async (id) => id,
+      build: ({ data }) => ({
+        value: data,
+      }),
+    });
+
+    const gcs = [];
+
+    for (let i = 0; i < 2000; i++) {
+      let desc = resolver.resolve({
+        key: i,
+      });
+      const gcPromise = desc.garbageCollected;
+
+
+      let obj = await desc.res;
+
+      obj = null as any;
+      desc = null as any;
+
+      gcs.push(gcPromise);
+    }
+
+    await forceGC();
+
+    await Promise.all(gcs);
+
+    expect(true).toBe(true);
+  });
+
+
+
+
 });
-
-
 
 
 

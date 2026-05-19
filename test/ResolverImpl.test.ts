@@ -1,6 +1,6 @@
 // frontdi.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { createResolver } from 'frontdi';
+import { createResolver } from '../src';
 
 describe('frontdi', () => {
   it('returns same descriptor for same key', () => {

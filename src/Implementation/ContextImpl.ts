@@ -1,5 +1,5 @@
 import { DependencyCycleError, type IContext, SelfReferenceError } from "../CoreApiTypes/Common";
-import { DescriptorImpl } from "./DescriptorImpl";
+import { type DepsDescriptor } from "./DescriptorImpl";
 
 
 
@@ -8,7 +8,7 @@ export class ContextImpl implements IContext {
   readonly _context = true as const;
   private readonly _depscontext = true as const; //for type checking
   constructor(
-    private node?: DescriptorImpl<unknown>
+    private node?: DepsDescriptor<object>
   ) {
   }
 
@@ -16,7 +16,7 @@ export class ContextImpl implements IContext {
     return new ContextImpl(this.node);
   }
 
-  next(descriptor: DescriptorImpl<unknown>): void {
+  next(descriptor: DepsDescriptor<object>): void {
     this.assertNoCycle(descriptor);
     if (this.node) {
       this.node.addDependency(descriptor);
@@ -24,14 +24,14 @@ export class ContextImpl implements IContext {
     this.node = descriptor;
   }
 
-  assertNoCycle(descriptor: DescriptorImpl<unknown>): void {
+  assertNoCycle(descriptor: DepsDescriptor<object>): void {
     if (!this.node) return;
 
     if (this.node === descriptor) {
       throw new SelfReferenceError(this.node.res);
     }
 
-    const visited = new Set<DescriptorImpl<unknown>>();
+    const visited = new Set<DepsDescriptor<object>>();
     const queue = [this.node];
 
     while (queue.length > 0) {

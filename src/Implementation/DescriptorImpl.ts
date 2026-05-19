@@ -1,16 +1,23 @@
 import type { Descriptor } from "../CoreApiTypes/Resolver";
-import { promiseWithResolvers } from "./ResolverImpl";
+import { createGarbageCollectPromise, promiseWithResolvers } from "./utils";
 import { IterableWeakSet } from "./WeakDataStructures/WeakSetIterable";
 
 
 
+export type DepsDescriptor<T extends object> = Descriptor<T> & { 
+  addDependency(dependecy: DepsDescriptor<object>): void
+  dependents: IterableWeakSet<DepsDescriptor<object>>
+};
 
-export class DescriptorImpl<T> implements Descriptor<T> {
-  private readonly dependencies = new Set<DescriptorImpl<unknown>>();
-  public readonly dependents = new IterableWeakSet<DescriptorImpl<unknown>>();
+export const createDescriptor = <T extends object>(res: Promise<T>, onInvalidate?: () => void): DepsDescriptor<T> => new DescriptorImpl(res, onInvalidate);
+
+export class DescriptorImpl<T extends object> implements DepsDescriptor<T> {
+  private readonly dependencies = new Set<DepsDescriptor<object>>();
+  public readonly dependents = new IterableWeakSet<DepsDescriptor<object>>();
   public readonly invalidated: Promise<T>;
   private readonly resolveInvalidated: (value: T) => void;
   private readonly rejectInvalidated: (reason?: any) => void;
+  public readonly garbageCollected: Promise<void>
   private alreadyInvalidated = false;
   constructor(
     public readonly res: Promise<T>,
@@ -20,6 +27,7 @@ export class DescriptorImpl<T> implements Descriptor<T> {
     this.invalidated = invalidated;
     this.resolveInvalidated = resolveInvalidated;
     this.rejectInvalidated = rejectInvalidated;
+    this.garbageCollected = createGarbageCollectPromise(this)
   }
   public readonly invalidate = () => {
     if (this.alreadyInvalidated) return;
@@ -29,8 +37,8 @@ export class DescriptorImpl<T> implements Descriptor<T> {
     this.res.then(this.resolveInvalidated).catch(this.rejectInvalidated);
     this.dependencies.clear();
   };
-  addDependency(dependecy: DescriptorImpl<unknown>): void {
+  addDependency(dependecy: DepsDescriptor<object>): void {
     this.dependencies.add(dependecy);
-    dependecy.dependents.add(this as DescriptorImpl<unknown>);
+    dependecy.dependents.add(this);
   }
 }

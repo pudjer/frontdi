@@ -2,20 +2,21 @@ import { type ClientRule } from "../CoreApiTypes/ClientRule";
 import { type IContext } from "../CoreApiTypes/Common";
 import { type RefreshArgs, type ResolveArgs, type Resolver } from "../CoreApiTypes/Resolver";
 import { ContextImpl } from "./ContextImpl";
-import { DescriptorImpl } from "./DescriptorImpl";
+import { createDescriptor, type DepsDescriptor } from "./DescriptorImpl";
 import { type WeakObjectStore } from "./ObjectStore/WeakObjectStore";
 import { WeakObjectStoreSerializableKey } from "./ObjectStore/WeakObjectStoreSerializableKey";
+import { promiseWithResolvers } from "./utils";
 
 
 
 export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, DATA, T> {
   constructor(
     private rule: ClientRule<KEY, DATA, T>,
-    private cache: WeakObjectStore<KEY, DescriptorImpl<T>> = new WeakObjectStoreSerializableKey<KEY, DescriptorImpl<T>>()
+    private cache: WeakObjectStore<KEY, DepsDescriptor<T>> = new WeakObjectStoreSerializableKey<KEY, DepsDescriptor<T>>()
   ) {}
 
 
-  resolve = (args: ResolveArgs<KEY, DATA>): DescriptorImpl<T> => {
+  resolve = (args: ResolveArgs<KEY, DATA>): DepsDescriptor<T> => {
     const { key, ctx: mbCtx } = args
     const ctx = mbCtx || new ContextImpl()
     if(!this.typeCheckContext(ctx)) throw new Error("invalid context")
@@ -23,12 +24,12 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
 
     const newCtx = ctx.copy()
     const res = descriptor || this.build({...args, ctx: newCtx})
-    newCtx.next(res as DescriptorImpl<unknown>)
+    newCtx.next(res)
 
     return res
   }
 
-  refresh = (args: RefreshArgs<KEY, DATA>): DescriptorImpl<T> => {
+  refresh = (args: RefreshArgs<KEY, DATA>): DepsDescriptor<T> => {
     const { key } = args
     const descriptor = this.cache.get(key)
 
@@ -38,7 +39,7 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
 
     const ctx = new ContextImpl()
     const res = this.build({...args, ctx})
-    ctx.next(res as DescriptorImpl<unknown>)
+    ctx.next(res)
 
     return res
   }
@@ -51,13 +52,13 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
   private readonly refs = new WeakMap<object, object>()
   private makeRef(obj1: object, obj2: object){ this.refs.set(obj1, obj2); this.refs.set(obj2, obj1) }
 
-  private build(args: ResolveArgs<KEY, DATA> & { ctx: ContextImpl }): DescriptorImpl<T> {
+  private build(args: ResolveArgs<KEY, DATA> & { ctx: ContextImpl }): DepsDescriptor<T> {
     const { key, data, ctx } = args;
 
     const { promise: target, resolve: resolveTarget, reject: rejectTarget } = promiseWithResolvers<T>()
 
 
-    const descriptor = new DescriptorImpl(target, () => {
+    const descriptor = createDescriptor(target, () => {
       const cached = this.cache.get(key)
       if(cached === descriptor) this.cache.delete(key)
     })
@@ -92,27 +93,3 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
   }
 }
 
-
-
-
-
-
-
-
-
-
-export function promiseWithResolvers<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: any) => void;
-} {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: any) => void;
-  
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  
-  return { promise, resolve, reject };
-}
