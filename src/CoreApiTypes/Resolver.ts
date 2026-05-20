@@ -18,6 +18,6 @@ export interface Descriptor<T> {
 }
 
 export interface Resolver<KEY, DATA, T extends object> {
-  refresh(args: RefreshArgs<KEY, DATA>): Descriptor<T>;
+  invalidateKey(key: KEY): void;
   resolve(args: ResolveArgs<KEY, DATA>): Descriptor<T>;
 }

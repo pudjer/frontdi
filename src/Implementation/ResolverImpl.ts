@@ -29,19 +29,11 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
     return res
   }
 
-  refresh = (args: RefreshArgs<KEY, DATA>): DepsDescriptor<T> => {
-    const { key } = args
+  invalidateKey = (key: KEY): void => {
     const descriptor = this.cache.get(key)
-
     if(descriptor) {
       descriptor.invalidate()
     }
-
-    const ctx = new ContextImpl()
-    const res = this.build({...args, ctx})
-    ctx.next(res)
-
-    return res
   }
 
   private typeCheckContext(ctx: IContext): ctx is ContextImpl{

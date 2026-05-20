@@ -35,7 +35,7 @@ describe('frontdi', () => {
 
     const a = await resolver.resolve({ key: 1 }).res;
 
-    await resolver.refresh({ key: 1 }).res;
+    resolver.invalidateKey(1);
 
     const b = await resolver.resolve({ key: 1 }).res;
 
@@ -159,7 +159,7 @@ describe('frontdi', () => {
 
     const user1 = await userResolver.resolve({ key: 1 }).res;
 
-    await companyResolver.refresh({ key: 1 }).res;
+    companyResolver.invalidateKey(1);
 
     const user2 = await userResolver.resolve({ key: 1 }).res;
 
@@ -272,7 +272,7 @@ describe('frontdi', () => {
 
     await resolver.resolve({ key: 1 }).res;
 
-    await resolver.refresh({ key: 1 }).res;
+    resolver.invalidateKey(1);
 
     await resolver.resolve({ key: 1 }).res;
 

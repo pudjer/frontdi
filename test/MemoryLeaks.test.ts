@@ -30,34 +30,37 @@ describe('frontdi memory semantics', () => {
     expect(gced).toBe(true);
   });
 
-  it('bad thing about invalidated promise', async () => {
+  it('invalidate does not prevent gc', async () => {
     let invalidated = false;
-
+    let gced = false;
     const resolver = createResolver<number, { id: number }, { id: number }>({
       fetch: async (id) => ({ id }),
 
       build: ({ data, self }) => {
+        const res = { id: data.id }
         self.invalidated.then(() => {
+          res.id = 2;
           invalidated = true;
         });
 
-        return { id: data.id };
+        return res;
       },
     });
 
     let obj = await resolver.resolve({ key: 1 }).res;
 
-    onGC(obj, () => {});
+    onGC(obj, () => {gced = true;});
 
     obj = null as any;
 
     await forceGC();
 
-    resolver.refresh({ key: 1 });
+    resolver.invalidateKey(1);
 
     await tick();
 
     expect(invalidated).toBe(false);
+    expect(gced).toBe(true);
   });
 
   it('dependency graph survives dependency value gc', async () => {
@@ -101,7 +104,7 @@ describe('frontdi memory semantics', () => {
     await forceGC();
     expect(depGced).toBe(false);
 
-    depResolver.refresh({ key: 1 });
+    depResolver.invalidateKey(1);
 
     await forceGC();
     expect(depGced).toBe(true);
@@ -191,7 +194,7 @@ describe('frontdi memory semantics', () => {
 
 
 
-  it('refresh creates fresh graph', async () => {
+  it('invalidateKey creates fresh graph', async () => {
     const resolver = createResolver<
       number,
       number,
@@ -203,7 +206,7 @@ describe('frontdi memory semantics', () => {
 
     const a = await resolver.resolve({ key: 1 }).res;
 
-    await resolver.refresh({ key: 1 }).res;
+    await resolver.invalidateKey(1);
 
     const b = await resolver.resolve({ key: 1 }).res;
 
@@ -242,7 +245,7 @@ describe('frontdi memory semantics', () => {
     expect(a).toBe(b);
   });
 
-  it('refresh invalidates previous object identity', async () => {
+  it('invalidateKey invalidates previous object identity', async () => {
     const resolver = createResolver<
       number,
       number,
@@ -254,7 +257,7 @@ describe('frontdi memory semantics', () => {
 
     const a = await resolver.resolve({ key: 1 }).res;
 
-    await resolver.refresh({ key: 1 }).res;
+    await resolver.invalidateKey(1);
 
     const b = await resolver.resolve({ key: 1 }).res;
 
@@ -431,7 +434,7 @@ describe('frontdi memory semantics', () => {
     
     await forceGC();
     
-    depResolver.refresh({ key: 1 });
+    depResolver.invalidateKey(1);
     
     await tick();
 

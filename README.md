@@ -1,6 +1,6 @@
 # frontdi
 
-> **Deterministic dependency resolution with shared object identity, cascading invalidation, and runtime cycle detection**
+> **Deterministic dependency resolution with shared object identity, cascading invalidation, runtime cycle detection, and GC-aware lifecycle hooks**
 
 `frontdi` is a lightweight dependency-resolution library for building **stable object graphs** from async data sources.
 
@@ -15,6 +15,7 @@ It gives you:
 * 📦 **JSON-serializable keys**
 * 🛠 `fetch()` + `build()` pipeline
 * 🧪 Works with provided `data` without calling `fetch`
+* 🗑 **Garbage-collection lifecycle hooks**
 
 ---
 
@@ -42,22 +43,22 @@ That means:
 
 ```ts
 const aDesc = userResolver.resolve({ key: 1 })
-const a = await a.res;
-const b = await userResolver.resolve({ key: 1 }).res;
 
-console.log(a === b); // true
+const a = await aDesc.res
+
+const b = await userResolver.resolve({ key: 1 }).res
+
+console.log(a === b) // true
 ```
 
 After invalidation:
 
 ```ts
-await userResolver.refresh({ key: 1 }).res;
+userResolver.invalidateKey(1)
 
-const c = await userResolver.resolve({ key: 1 }).res; //always invalidates previous value on key
-//or
-aDesc.invalidate() //invalidates only this descriptor if it is an actual descriptor
+const c = await userResolver.resolve({ key: 1 }).res
 
-console.log(c === a); // false
+console.log(c === a) // false
 ```
 
 This makes `frontdi` behave closer to an **identity map + dependency graph** than a simple async cache.
@@ -75,112 +76,188 @@ npm i frontdi
 # Quick Example
 
 ```ts
-import { createResolver } from 'frontdi';
+import { createResolver } from 'frontdi'
 
-type Key = number;
+type Key = number
 
 interface UserData {
-  id: number;
-  username: string;
-  address: AddressData;
+  id: number
+  username: string
+  address: AddressData,
+  companyId: number
 }
 
-class User{
+class User {
+  public invalidated: boolean = false
   constructor(
     public id: number,
     public username: string,
     public address: Address,
     public company: Company
-  ){}
+  ) {}
 }
 
 const userResolver = createResolver<Key, UserData, User>({
   fetch: getUser,
 
-  build: async ({ data: user, ctx, key, self }) => {
+  build: async ({ data, ctx, key, self }) => {
     // resolve dependencies using the SAME ctx
 
     const company = await companyResolver.resolve({
-      key,
-      ctx, //just always pass it if you can
-    }).res;
+      key: data.companyId,
+      ctx,
+    }).res
 
     const address = await addressResolver.resolve({
       key,
-      data: user.address, // data is only used when creating a new descriptor.
-      ctx,                // If the descriptor already exists in cache for the same key, cached state wins and provided data is ignored.    
-    }).res;
+      data: data.address,
+      ctx,
+    }).res
 
+    const user = new User(
+      data.id,
+      data.username,
+      address,
+      company
+    )
 
-    self.invalidated.then(() => { // resolves strictly after build + invalidation; do not await self.invalidated/self.res inside build (deadlock)
-      // cleanup logic
-      // subscriptions
-      // dispose resources
-    });
+    const ref = new WeakRef(user)
+    const unsubscribe = someSource.subscribe(user.id, (changes)=>{
+      const user = ref.deref() // avoid strong refs to result/self/context
+      if(user){
+        //
+      }
+    })
 
-    return new User(user.id, user.username, address, company);
+    self.invalidated.then((u) => {
+      unsubscribe()
+      u.invalidated = true
+    })
+
+    self.garbageCollected.then(() => {
+      unsubscribe()
+      // triggered when descriptor becomes unreachable
+      // cleanup may happen via invalidation OR GC
+      //🚫user.invalidated = true; avoid strong refs to result/self/context
+    })
+
+    return user
   },
-});
+})
 
-const user = await userResolver.resolve({ key: 1 }).res;
+const user = await userResolver.resolve({ key: 1 }).res
 
-const same = await userResolver.resolve({ key: 1 }).res;
+const same = await userResolver.resolve({ key: 1 }).res
 
-console.log(user === same); // true
+//uses cached value
+console.log(user === same) // true
 
-userResolver.refresh({ key: 1 });
+// user depends on company
+companyResolver.invalidateKey(user.company.id)
 
-const updated = await userResolver.resolve({ key: 1 }).res;
+const updated = await userResolver.resolve({ key: 1 }).res
 
-console.log(updated === user); // false
+console.log(updated === user) // false
 ```
 
 ---
 
 # Resolver lifecycle
 
-Each resolver produces a **Descriptor**:
+Each resolver produces a `Descriptor`:
 
 ```ts
-type Descriptor<T> = {
-  res: Promise<T>;
-  invalidated: Promise<T>;
-  invalidate(): void;
+export interface Descriptor<T> {
+  res: Promise<T>
+  invalidated: Promise<T>
+  invalidate: Invalidate
+  garbageCollected: Promise<void>
 }
 ```
+
+---
 
 ## `descriptor.res`
 
 Resolves to the built object.
 
+```ts
+const user = await descriptor.res
+```
+
 ---
 
 ## `descriptor.invalidated`
 
-Resolves AFTER the descriptor is invalidated.
+Resolves after the descriptor is invalidated.
 
 Useful for:
 
-* cleanup
-* unsubscribing
-* cache disposal
+* subscriptions
 * reactive systems
-* lifecycle hooks
+* explicit resource disposal
+* dependency-driven rebuilds
 
 ```ts
-descriptor.invalidated.then((value) => {
-  console.log('invalidated', value);
-});
+descriptor.invalidated.then((target) => {
+  console.log(target, 'descriptor invalidated')
+})
+```
+
+---
+
+## `descriptor.garbageCollected`
+
+Resolves when the descriptor is garbage collected.
+
+Useful for:
+
+* weak-resource cleanup
+* cache-adjacent systems
+* diagnostics
+* non-critical disposal logic
+
+```ts
+descriptor.garbageCollected.then(() => {
+  console.log('descriptor collected')
+})
 ```
 
 ---
 
 ## `descriptor.invalidate()`
 
-Manually invalidates the descriptor and cascades invalidation to dependents.
+Marks the descriptor as stale.
+
+Important:
+
+`resolver.invalidate(key)` is intended for cases where the underlying object became outdated because of external mutations or side effects.
+`descriptor.invalidate()` does not invalidate key always.
+
+Examples:
+
+* websocket updates
+* manual object mutation
+* external store changes
+* server-side updates
+* invalidated subscriptions
+
+It is **NOT required** for garbage collection.
+
+If nothing references the descriptor anymore, it may still be collected naturally by the GC.
+
+---
+
+# Resolver API
 
 ```ts
-descriptor.invalidate();
+export interface Resolver<KEY, DATA, T extends object> {
+  invalidateKey(key: KEY): void
+
+  resolve(
+    args: ResolveArgs<KEY, DATA>
+  ): Descriptor<T>
+}
 ```
 
 ---
@@ -192,20 +269,24 @@ descriptor.invalidate();
 Examples:
 
 ```ts
-type Key = number;
+type Key = number
+```
 
+```ts
 type Key = {
-  left: number;
-  right: number;
-};
+  left: number
+  right: number
+}
+```
 
+```ts
 type Key = {
-  userId: number;
+  userId: number
   filters: {
-    active: boolean;
-    page: number;
-  };
-};
+    active: boolean
+    page: number
+  }
+}
 ```
 
 Internally, keys are normalized deterministically.
@@ -245,11 +326,11 @@ should ideally be sorted before resolving.
 Example:
 
 ```ts
-const tags = [...inputTags].sort();
+const tags = [...inputTags].sort()
 
 resolver.resolve({
   key: { tags }
-});
+})
 ```
 
 Otherwise they are treated as different keys.
@@ -272,12 +353,12 @@ function createResolver<KEY, DATA, T extends object>(
 
 ```ts
 type ClientRule<KEY, DATA, T extends object> = {
-  fetch: (key: KEY) => Promise<DATA> | DATA;
+  fetch: (key: KEY) => Promise<DATA> | DATA
 
   build: (
     info: BuildInfo<KEY, DATA, T>
-  ) => Promise<T> | T;
-};
+  ) => Promise<T> | T
+}
 ```
 
 ---
@@ -285,15 +366,17 @@ type ClientRule<KEY, DATA, T extends object> = {
 # `resolve(args)`
 
 ```ts
-resolve(args: ResolveArgs<KEY, DATA>): Descriptor<T>
+resolve(
+  args: ResolveArgs<KEY, DATA>
+): Descriptor<T>
 ```
 
 ```ts
 type ResolveArgs<KEY, DATA> = {
-  key: KEY;
-  data?: DATA;
-  ctx?: IContext;
-};
+  key: KEY
+  data?: DATA
+  ctx?: IContext
+}
 ```
 
 ---
@@ -306,7 +389,7 @@ type ResolveArgs<KEY, DATA> = {
 resolver.resolve({
   key,
   data
-});
+})
 ```
 
 * `fetch()` is skipped
@@ -319,7 +402,7 @@ resolver.resolve({
 ```ts
 resolver.resolve({
   key
-});
+})
 ```
 
 Flow:
@@ -339,9 +422,9 @@ cached descriptor
 Resolvers automatically build a dependency graph through shared `ctx`.
 
 ```ts
-const user = userResolver.resolve({ key, ctx });
+const user = userResolver.resolve({ key, ctx })
 
-const posts = postsResolver.resolve({ key, ctx });
+const posts = postsResolver.resolve({ key, ctx })
 ```
 
 Dependencies are recorded during `build()`.
@@ -350,7 +433,7 @@ This enables:
 
 * cascading invalidation
 * cycle detection
-* dependency-aware refreshes
+* dependency-aware rebuilds
 
 ---
 
@@ -365,7 +448,7 @@ User -> Company -> Address
 and `Company` is invalidated:
 
 ```ts
-companyResolver.refresh({ key });
+companyResolver.invalidateKey(key)
 ```
 
 then dependent `User` descriptors are invalidated automatically.
@@ -393,7 +476,7 @@ A -> B -> A
 In those cases:
 
 ```ts
-await resolver.resolve(...).res;
+await resolver.resolve(...).res
 ```
 
 rejects with:
@@ -417,27 +500,21 @@ resolver.resolve({ key })
 return the SAME descriptor instance until invalidation.
 
 ```ts
-const d1 = resolver.resolve({ key: 1 });
-const d2 = resolver.resolve({ key: 1 });
+const d1 = resolver.resolve({ key: 1 })
 
-console.log(d1 === d2); // true
+const d2 = resolver.resolve({ key: 1 })
+
+console.log(d1 === d2) // true
 ```
 
 ---
 
-# Refresh
+# Invalidating by key
 
-## `refresh(args)`
-
-```ts
-refresh(args: RefreshArgs<KEY, DATA>): Descriptor<T>
-```
+## `invalidateKey(key)`
 
 ```ts
-type RefreshArgs<KEY, DATA> = {
-  key: KEY;
-  data?: DATA;
-};
+resolver.invalidateKey(key)
 ```
 
 Behavior:
@@ -445,10 +522,12 @@ Behavior:
 * invalidates cached descriptor by key
 * removes it from cache
 * cascades invalidation to dependents
-* creates a new build context internally
+* next `resolve()` rebuilds fresh state
+
+Example:
 
 ```ts
-await resolver.refresh({ key }).res;
+userResolver.invalidateKey(1)
 ```
 
 ---
@@ -461,7 +540,7 @@ await resolver.refresh({ key }).res;
 childResolver.resolve({
   key,
   ctx,
-});
+})
 ```
 
 Without shared context, dependency tracking will not work.
@@ -486,6 +565,16 @@ Better with arrays:
   tags: [...tags].sort()
 }
 ```
+
+---
+
+## Use invalidation only for stale state
+
+`invalidate()` and `invalidateKey()` are for rebuilding stale objects after external changes.
+
+They are not lifecycle requirements for cleanup or memory release.
+
+Garbage collection works independently.
 
 ---
 
