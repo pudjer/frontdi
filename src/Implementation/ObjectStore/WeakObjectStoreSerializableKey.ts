@@ -4,7 +4,7 @@ export interface KeySerializer<KEY, SRLZD> {
 	serialize(key: KEY): SRLZD
 }
 
-export class OrdredJSONKeySerializer<KEY> implements KeySerializer<KEY, string> {
+export class OrderedJSONKeySerializer<KEY> implements KeySerializer<KEY, string> {
 	serialize(obj: KEY): string {
 			const allKeys = new Set();
 			JSON.stringify(obj, (key, value) => (allKeys.add(key), value));
@@ -17,7 +17,7 @@ export class OrdredJSONKeySerializer<KEY> implements KeySerializer<KEY, string> 
 export class WeakObjectStoreSerializableKey<KEY, T extends object> implements WeakObjectStore<KEY, T> {
 	private readonly weakMapReverse = new WeakMapReverse<string, T>()
 	constructor(
-		private readonly keySerializer: KeySerializer<KEY, string> = new OrdredJSONKeySerializer<KEY>()
+		private readonly keySerializer: KeySerializer<KEY, string> = new OrderedJSONKeySerializer<KEY>()
 	){}
 
 	get(key: KEY): T | undefined {

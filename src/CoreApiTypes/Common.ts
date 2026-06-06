@@ -5,8 +5,8 @@ export interface IContext {
 }
 
 export class DependencyCycleError extends Error {
-  constructor(public readonly cycle: Array<Promise<unknown>>) { super(`Cycle detected`) }
+  constructor(public readonly cycle: Array<unknown>) { super(`Cycle detected`) }
 }
 export class SelfReferenceError extends DependencyCycleError {
-  constructor(public readonly node: Promise<unknown>) { super([node]) }
+  constructor(public readonly node: unknown) { super([node]) }
 }

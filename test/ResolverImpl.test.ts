@@ -21,8 +21,8 @@ describe('frontdi', () => {
       build: ({ data }) => ({ id: data.id }),
     });
 
-    const a = await resolver.resolve({ key: 1 }).res;
-    const b = await resolver.resolve({ key: 1 }).res;
+    const a = await resolver.resolve({ key: 1 }).resPromise;
+    const b = await resolver.resolve({ key: 1 }).resPromise;
 
     expect(a).toBe(b);
   });
@@ -33,11 +33,11 @@ describe('frontdi', () => {
       build: ({ data }) => ({ id: data.id }),
     });
 
-    const a = await resolver.resolve({ key: 1 }).res;
+    const a = await resolver.resolve({ key: 1 }).resPromise;
 
     resolver.invalidateKey(1);
 
-    const b = await resolver.resolve({ key: 1 }).res;
+    const b = await resolver.resolve({ key: 1 }).resPromise;
 
     expect(a).not.toBe(b);
   });
@@ -50,11 +50,11 @@ describe('frontdi', () => {
 
     const desc = resolver.resolve({ key: 1 });
 
-    const a = await desc.res;
+    const a = await desc.resPromise;
 
     desc.invalidate();
 
-    const b = await resolver.resolve({ key: 1 }).res;
+    const b = await resolver.resolve({ key: 1 }).resPromise;
 
     expect(a).not.toBe(b);
   });
@@ -70,7 +70,7 @@ describe('frontdi', () => {
     const obj = await resolver.resolve({
       key: 1,
       data: { id: 123 },
-    }).res;
+    }).resPromise;
 
     expect(fetch).not.toHaveBeenCalled();
     expect(obj.id).toBe(123);
@@ -84,7 +84,7 @@ describe('frontdi', () => {
       build: ({ data }) => ({ id: data.id }),
     });
 
-    await resolver.resolve({ key: 1 }).res;
+    await resolver.resolve({ key: 1 }).resPromise;
 
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(1);
@@ -148,7 +148,7 @@ describe('frontdi', () => {
         const company = await companyResolver.resolve({
           key: data.id,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {
           id: data.id,
@@ -157,11 +157,11 @@ describe('frontdi', () => {
       },
     });
 
-    const user1 = await userResolver.resolve({ key: 1 }).res;
+    const user1 = await userResolver.resolve({ key: 1 }).resPromise;
 
     companyResolver.invalidateKey(1);
 
-    const user2 = await userResolver.resolve({ key: 1 }).res;
+    const user2 = await userResolver.resolve({ key: 1 }).resPromise;
 
     expect(user1).not.toBe(user2);
     expect(user1.company).not.toBe(user2.company);
@@ -177,9 +177,9 @@ describe('frontdi', () => {
 
     const invalidated = vi.fn();
 
-    desc.invalidated.then(invalidated);
+    desc.onInvalidate(invalidated);
 
-    await desc.res;
+    await desc.resPromise;
 
     desc.invalidate();
 
@@ -196,15 +196,14 @@ describe('frontdi', () => {
         await resolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {};
       },
     });
 
     const desc = resolver.resolve({ key: 1 });
-    await expect(desc.res).rejects.toThrow(/cycle/i);
-    await expect(desc.invalidated).rejects.toThrow(/cycle/i);
+    await expect(desc.resPromise).rejects.toThrow(/cycle/i);
   });
 
   it('detects dependency cycles', async () => {
@@ -215,7 +214,7 @@ describe('frontdi', () => {
         await resolverB.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {};
       },
@@ -228,7 +227,7 @@ describe('frontdi', () => {
         await resolverA.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {};
       },
@@ -236,11 +235,9 @@ describe('frontdi', () => {
 
     const desc = resolverA.resolve({ key: 1 });
     const desc2 = resolverB.resolve({ key: 1 });
-    await expect(desc.res).rejects.toThrow(/cycle/i);
-    await expect(desc.invalidated).rejects.toThrow(/cycle/i);
+    await expect(desc.resPromise).rejects.toThrow(/cycle/i);
 
-    await expect(desc2.res).rejects.toThrow(/cycle/i);
-    await expect(desc2.invalidated).rejects.toThrow(/cycle/i);
+    await expect(desc2.resPromise).rejects.toThrow(/cycle/i);
   });
 
   it('does not rebuild while cached', async () => {
@@ -253,9 +250,9 @@ describe('frontdi', () => {
       build,
     });
 
-    await resolver.resolve({ key: 1 }).res;
-    await resolver.resolve({ key: 1 }).res;
-    await resolver.resolve({ key: 1 }).res;
+    await resolver.resolve({ key: 1 }).resPromise;
+    await resolver.resolve({ key: 1 }).resPromise;
+    await resolver.resolve({ key: 1 }).resPromise;
 
     expect(build).toHaveBeenCalledTimes(1);
   });
@@ -270,11 +267,11 @@ describe('frontdi', () => {
       build,
     });
 
-    await resolver.resolve({ key: 1 }).res;
+    await resolver.resolve({ key: 1 }).resPromise;
 
     resolver.invalidateKey(1);
 
-    await resolver.resolve({ key: 1 }).res;
+    await resolver.resolve({ key: 1 }).resPromise;
 
     expect(build).toHaveBeenCalledTimes(2);
   });
@@ -300,14 +297,14 @@ describe('frontdi', () => {
         const address = await addressResolver.resolve({
           key: data.id,
           ctx,
-        }).res;
+        }).resPromise;
 
         return { address };
       },
     });
 
-    const u1 = await userResolver.resolve({ key: 1 }).res;
-    const u2 = await userResolver.resolve({ key: 1 }).res;
+    const u1 = await userResolver.resolve({ key: 1 }).resPromise;
+    const u2 = await userResolver.resolve({ key: 1 }).resPromise;
 
     expect(u1.address).toBe(u2.address);
   });

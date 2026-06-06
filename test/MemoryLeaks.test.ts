@@ -17,7 +17,7 @@ describe('frontdi memory semantics', () => {
 
     let gced = false;
 
-    let obj = await resolver.resolve({ key: 1 }).res;
+    let obj = await resolver.resolve({ key: 1 }).resPromise;
 
     onGC(obj, () => {
       gced = true;
@@ -38,7 +38,7 @@ describe('frontdi memory semantics', () => {
 
       build: ({ data, self }) => {
         const res = { id: data.id }
-        self.invalidated.then(() => {
+        self.onInvalidate(() => {
           res.id = 2;
           invalidated = true;
         });
@@ -47,7 +47,7 @@ describe('frontdi memory semantics', () => {
       },
     });
 
-    let obj = await resolver.resolve({ key: 1 }).res;
+    let obj = await resolver.resolve({ key: 1 }).resPromise;
 
     onGC(obj, () => {gced = true;});
 
@@ -86,15 +86,15 @@ describe('frontdi memory semantics', () => {
         const dep = await depResolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {};
       },
     });
 
-    let depObj = await depResolver.resolve({ key: 1 }).res;
+    let depObj = await depResolver.resolve({ key: 1 }).resPromise;
 
-    const root = await rootResolver.resolve({ key: 1 }).res;
+    const root = await rootResolver.resolve({ key: 1 }).resPromise;
 
 
     onGC(depObj, () => {depGced = true});
@@ -134,7 +134,7 @@ describe('frontdi memory semantics', () => {
         const dep = await depResolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {
           depValue: dep.value,
@@ -142,9 +142,9 @@ describe('frontdi memory semantics', () => {
       },
     });
 
-    const dep = await depResolver.resolve({ key: 1 }).res;
+    const dep = await depResolver.resolve({ key: 1 }).resPromise;
 
-    let root = await rootResolver.resolve({ key: 1 }).res;
+    let root = await rootResolver.resolve({ key: 1 }).resPromise;
 
     let rootGCed = false;
 
@@ -170,13 +170,13 @@ describe('frontdi memory semantics', () => {
       fetch: async (id) => id,
 
       build: ({ data, self }) => {
-        self.invalidated.then(() => {});
+        self.onInvalidate(() => {});
 
         return { value: data };
       },
     });
 
-    let obj = await resolver.resolve({ key: 1 }).res;
+    let obj = await resolver.resolve({ key: 1 }).resPromise;
 
     let gced = false;
 
@@ -204,11 +204,11 @@ describe('frontdi memory semantics', () => {
       build: ({ data }) => ({ v: data }),
     });
 
-    const a = await resolver.resolve({ key: 1 }).res;
+    const a = await resolver.resolve({ key: 1 }).resPromise;
 
     await resolver.invalidateKey(1);
 
-    const b = await resolver.resolve({ key: 1 }).res;
+    const b = await resolver.resolve({ key: 1 }).resPromise;
 
     expect(a).not.toBe(b);
   });
@@ -239,8 +239,8 @@ describe('frontdi memory semantics', () => {
       build: ({ data }) => ({ value: data }),
     });
 
-    const a = await resolver.resolve({ key: 1 }).res;
-    const b = await resolver.resolve({ key: 1 }).res;
+    const a = await resolver.resolve({ key: 1 }).resPromise;
+    const b = await resolver.resolve({ key: 1 }).resPromise;
 
     expect(a).toBe(b);
   });
@@ -255,11 +255,11 @@ describe('frontdi memory semantics', () => {
       build: ({ data }) => ({ value: data }),
     });
 
-    const a = await resolver.resolve({ key: 1 }).res;
+    const a = await resolver.resolve({ key: 1 }).resPromise;
 
     await resolver.invalidateKey(1);
 
-    const b = await resolver.resolve({ key: 1 }).res;
+    const b = await resolver.resolve({ key: 1 }).resPromise;
 
     expect(a).not.toBe(b);
   });
@@ -285,11 +285,11 @@ describe('frontdi memory semantics', () => {
     const a = await resolver.resolve({
       key: 1,
       data: { value: 123 },
-    }).res;
+    }).resPromise;
 
     const b = await resolver.resolve({
       key: 1,
-    }).res;
+    }).resPromise;
 
     expect(a).toBe(b);
     expect(fetches).toBe(0);
@@ -318,9 +318,9 @@ describe('frontdi memory semantics', () => {
         const child = await childResolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
-        self.invalidated.then(() => {
+        self.onInvalidate(() => {
           rootInvalidated = true;
         });
 
@@ -330,7 +330,7 @@ describe('frontdi memory semantics', () => {
       },
     });
 
-    await rootResolver.resolve({ key: 1 }).res;
+    await rootResolver.resolve({ key: 1 }).resPromise;
 
     const childDesc = childResolver.resolve({ key: 1 });
 
@@ -354,7 +354,7 @@ describe('frontdi memory semantics', () => {
     for (let i = 0; i < 5000; i++) {
       let obj = await resolver.resolve({
         key: i,
-      }).res;
+      }).resPromise;
 
       obj = null as any;
     }
@@ -376,7 +376,7 @@ describe('frontdi memory semantics', () => {
     });
 
     let desc = resolver.resolve({ key: 1 });
-    let obj = await desc.res;
+    let obj = await desc.resPromise;
 
     const gcPromise = desc.garbageCollected;
 
@@ -412,9 +412,9 @@ describe('frontdi memory semantics', () => {
         const dep = await depResolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
-        self.invalidated.then(() => {
+        self.onInvalidate(() => {
           rootInvalidated = true;
         });
 
@@ -425,9 +425,9 @@ describe('frontdi memory semantics', () => {
     });
 
     let depDesc = depResolver.resolve({ key: 1 });
-    let dep = await depDesc.res;
+    let dep = await depDesc.resPromise;
 
-    const root = await rootResolver.resolve({ key: 1 }).res;
+    const root = await rootResolver.resolve({ key: 1 }).resPromise;
 
     dep = null as any;
     depDesc = null as any;
@@ -437,7 +437,7 @@ describe('frontdi memory semantics', () => {
     depResolver.invalidateKey(1);
     
     await tick();
-
+    root
     expect(rootInvalidated).toBe(true);
   });
 
@@ -462,7 +462,7 @@ describe('frontdi memory semantics', () => {
         const dep = await depResolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {
           dep: dep.value,
@@ -472,13 +472,13 @@ describe('frontdi memory semantics', () => {
 
     const dep = await depResolver.resolve({
       key: 1,
-    }).res;
+    }).resPromise;
 
     let rootDesc = rootResolver.resolve({
       key: 1,
     });
 
-    let root = await rootDesc.res;
+    let root = await rootDesc.resPromise;
     const gcPromise = rootDesc.garbageCollected;
 
     root = null as any;
@@ -513,7 +513,7 @@ describe('frontdi memory semantics', () => {
         const child = await childResolver.resolve({
           key: 1,
           ctx,
-        }).res;
+        }).resPromise;
 
         return {
           computed: child.value * 2,
@@ -523,13 +523,13 @@ describe('frontdi memory semantics', () => {
 
     const child = await childResolver.resolve({
       key: 1,
-    }).res;
+    }).resPromise;
 
     let parentDesc = parentResolver.resolve({
       key: 1,
     });
 
-    let parent = await parentDesc.res;
+    let parent = await parentDesc.resPromise;
     const gcPromise = parentDesc.garbageCollected;
 
     expect(child.value).toBe(1);
@@ -552,7 +552,7 @@ describe('frontdi memory semantics', () => {
       fetch: async (id) => id,
 
       build: ({ data, self }) => {
-        self.invalidated.then(() => {});
+        self.onInvalidate(() => {});
 
         return {
           value: data,
@@ -561,7 +561,7 @@ describe('frontdi memory semantics', () => {
     });
 
     let desc = resolver.resolve({ key: 1 });
-    let obj = await desc.res;
+    let obj = await desc.resPromise;
     const gcPromise = desc.garbageCollected;
 
     obj = null as any;
@@ -595,7 +595,7 @@ describe('frontdi memory semantics', () => {
       const gcPromise = desc.garbageCollected;
 
 
-      let obj = await desc.res;
+      let obj = await desc.resPromise;
 
       obj = null as any;
       desc = null as any;
