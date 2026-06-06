@@ -87,7 +87,7 @@ class Invalidatable {
         subscriber();
       } catch {}
     }
-
+    this.subscribers.clear();
     return true;
   }
 

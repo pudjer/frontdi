@@ -2,13 +2,10 @@ import type { Data } from "./ClientRule"
 import type { IContext } from "./Common"
 
 
-type KeyArgs<KEY> = { key: KEY }
+type KeyArgs<KEY> = { key: KEY, ctx?: IContext }
 type DataArgs<DATA extends Data> = { data: DATA }
-export type RefreshArgs<KEY, DATA extends Data> = KeyArgs<KEY> & (DataArgs<DATA> | {})
+export type ResolveArgs<KEY, DATA extends Data> = KeyArgs<KEY> & (DataArgs<DATA> | {})
 
-export type ResolveArgs<KEY, DATA extends Data> = { 
-  ctx?: IContext
-} & RefreshArgs<KEY, DATA>
 
 type Unsubscribe = () => void
 type Subscriber = () => void
