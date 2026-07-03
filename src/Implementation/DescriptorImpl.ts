@@ -128,11 +128,7 @@ export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T,
 
   constructor(
     private readonly build: (data: DATA) => Promise<T>
-  ) {
-    this.onInvalidate(() => {
-      this.invalidated = true;
-    });
-  }
+  ) {}
 
 
   checkForCycles(child: DepsDescriptor<object, unknown>): void {
@@ -213,6 +209,7 @@ export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T,
     if (!shouldRun) {
       return;
     }
+    this.invalidated = true;
     this.parents.forEach(parent => parent.invalidate());
     this.children.clear();
     this.parents.clear();
