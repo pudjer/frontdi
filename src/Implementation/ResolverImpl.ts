@@ -1,62 +1,73 @@
-import { type ClientRule, type Data } from "../CoreApiTypes/ClientRule";
-import { type IContext } from "../CoreApiTypes/Common";
+import { type ClientRule } from "../CoreApiTypes/ClientRule";
+import type { Descriptor } from "../CoreApiTypes/Descriptor";
 import { type ResolveArgs, type Resolver } from "../CoreApiTypes/Resolver";
-import { ContextImpl } from "./DepsTracking/ContextImpl";
 import { DescriptorImpl } from "./DescriptorImpl";
 import { type WeakObjectStore } from "./ObjectStore/WeakObjectStore";
 import { WeakObjectStoreSerializableKey } from "./ObjectStore/WeakObjectStoreSerializableKey";
 
 
 
-export class ResolverImpl<KEY, DATA extends Data, T extends object> implements Resolver<KEY, DATA, T> {
+export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, DATA, T> {
   constructor(
     private rule: ClientRule<KEY, DATA, T>,
     private cache: WeakObjectStore<KEY, DescriptorImpl<T, DATA>> = new WeakObjectStoreSerializableKey<KEY, DescriptorImpl<T, DATA>>()
   ) {}
 
 
-  private typeCheckContext(ctx: IContext): ctx is ContextImpl{
-    return "_depscontext" in ctx
+  private typeCheckParent(parent: Descriptor<object>): parent is DescriptorImpl<object, unknown> {
+    return parent instanceof DescriptorImpl
   }
 
 
   resolve = (args: ResolveArgs<KEY, DATA>): DescriptorImpl<T, DATA> => {
-    const { key, ctx: mbCtx } = args
-    const ctx = mbCtx || new ContextImpl()
-    if(!this.typeCheckContext(ctx)) throw new Error("invalid context")
+    const { key, self: parent } = args
+
+    if(parent){
+      if(!this.typeCheckParent(parent)) throw new Error("invalid parent")
+    }
     const cached = this.cache.get(key)
 
 
-    let desc: DescriptorImpl<T, DATA>
-    const newCtx = ctx.copy()
-    const build = (data: DATA) => Promise.resolve().then(() => this.rule.build({data, self: desc, ctx: newCtx, key}))
+    let self: DescriptorImpl<T, DATA>
+    const build = (fetchedData: DATA) => Promise.resolve().then(() => this.rule.build({data: fetchedData, self, key}))
 
     if(cached){
-
-      desc = cached
+      parent?.checkForCycles(cached)
       if("data" in args){
-        desc = cached.onData(args.data)
+        cached.onData(args.data)
+        if(cached.invalidated){
+          self = new DescriptorImpl<T, DATA>(build)
+          self.onData(args.data)
+        }else{
+          self = cached
+        }
+      }else{
+        self = cached
       }
 
     }else{
 
-      desc = new DescriptorImpl<T, DATA>(build);
+      self = new DescriptorImpl<T, DATA>(build);
 
       if("data" in args){
-        desc = desc.onData(args.data)
+        self.onData(args.data)
       }else{
-        desc.fetchData(()=>Promise.resolve(this.rule.fetch(args.key)))
+        self.fetchData(()=>Promise.resolve(this.rule.fetch(key)))
       }
 
-      this.cache.set(key, desc)
-      desc.onInvalidate(() => {
+      self.onInvalidate(() => {
         const cached = this.cache.get(key)
-        if(cached === desc) this.cache.delete(key)
+        if(cached === self) this.cache.delete(key)
       })
     }
+    
+    parent?.addChild(self)
 
-    newCtx.next(desc.graph)
-    return desc
+    if(self !== cached){
+      this.cache.set(key, self)
+    }
+    
+    return self
   }
 
   invalidateKey = (key: KEY): void => {

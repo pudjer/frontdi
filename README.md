@@ -8,14 +8,13 @@ It gives you:
 
 * ♻️ **Shared object instances by key**
 * ⚡ **Weakly-cached descriptors**
-* 🧠 **Automatic dependency graph tracking**
+* 🧠 **Automatic parent-child dependency graph tracking**
 * 🔄 **Cascading invalidation**
-* 🚫 **Runtime cycle detection**
+* 🚫 **Runtime cycle detection with detailed error types**
 * 🧩 **Composable async resolvers**
 * 📦 **JSON-serializable keys**
 * 🛠 `fetch()` + `build()` pipeline
 * 🧪 Works with provided `data` without calling `fetch`
-* 🗑 **Garbage-collection lifecycle hooks**
 
 ---
 
@@ -44,9 +43,9 @@ That means:
 ```ts
 const aDesc = userResolver.resolve({ key: 1 })
 
-const a = await aDesc.res
+const a = await aDesc.resPromise
 
-const b = await userResolver.resolve({ key: 1 }).res
+const b = await userResolver.resolve({ key: 1 }).resPromise
 
 console.log(a === b) // true
 ```
@@ -56,7 +55,7 @@ After invalidation:
 ```ts
 userResolver.invalidateKey(1)
 
-const c = await userResolver.resolve({ key: 1 }).res
+const c = await userResolver.resolve({ key: 1 }).resPromise
 
 console.log(c === a) // false
 ```
@@ -100,19 +99,25 @@ class User {
 const userResolver = createResolver<Key, UserData, User>({
   fetch: getUser,
 
-  build: async ({ data, ctx, key, self }) => {
-    // resolve dependencies using the SAME ctx
-
-    const company = await companyResolver.resolve({
+  build: async ({ data, self, key }) => {
+    // resolve dependencies by passing `self` as parent — no ctx needed
+    
+    const companyDesc = await companyResolver.resolve({
       key: data.companyId,
-      ctx,
-    }).res
+      self,
+    })
 
-    const address = await addressResolver.resolve({
+    const addressDesc = await addressResolver.resolve({
       key,
       data: data.address,
-      ctx,
-    }).res
+      self,
+    })
+
+    // subscribe to invalidation events for cleanup
+    
+
+    const company = await companyDesc.resPromise
+    const address = await addressDesc.resPromise
 
     const user = new User(
       data.id,
@@ -120,119 +125,159 @@ const userResolver = createResolver<Key, UserData, User>({
       address,
       company
     )
-
-    const ref = new WeakRef(user)
-    const unsubscribe = someSource.subscribe(user.id, (changes)=>{
-      const user = ref.deref() // avoid strong refs to result/self/context
-      if(user){
-        //
-      }
-    })
-
-    self.invalidated.then((u) => {
-      unsubscribe()
-      u.invalidated = true
-    })
-
-    self.garbageCollected.then(() => {
-      unsubscribe()
-      // triggered when descriptor becomes unreachable
-      // cleanup may happen via invalidation OR GC
-      //🚫user.invalidated = true; avoid strong refs to result/self/context
+    
+    const unsubInvalidate = self.onInvalidate(() => {
+      user.invalidated = true
     })
 
     return user
   },
 })
 
-const user = await userResolver.resolve({ key: 1 }).res
-
-const same = await userResolver.resolve({ key: 1 }).res
+const userDesc = userResolver.resolve({ key: 1 })
 
 //uses cached value
-console.log(user === same) // true
+console.log(userDesc === userResolver.resolve({ key: 1 })) // true
 
-// user depends on company
+// user depends on company (tracked automatically via parent-child)
 companyResolver.invalidateKey(user.company.id)
 
-const updated = await userResolver.resolve({ key: 1 }).res
+const updated = await userResolver.resolve({ key: 1 }).resPromise
 
 console.log(updated === user) // false
 ```
 
 ---
 
-# Resolver lifecycle
+# Descriptor lifecycle
 
 Each resolver produces a `Descriptor`:
 
 ```ts
-export interface Descriptor<T> {
-  res: Promise<T>
-  invalidated: Promise<T>
-  invalidate: Invalidate
-  garbageCollected: Promise<void>
+export interface Descriptor<T extends object> {
+  resPromise: Promise<T>;
+  res: T | undefined;
+  error: unknown;
+  isPending: boolean;
+  invalidatedPromise: Promise<T>;
+  invalidated: boolean;
+  onInvalidate: Subscribe;
+  invalidate(): void;
 }
+
+type Subscribe = (subscriber: Subscriber) => Unsubscribe
+```
+
+---
+
+## `descriptor.resPromise`
+
+The underlying promise that resolves to the built object.
+
+```ts
+const user = await descriptor.resPromise
 ```
 
 ---
 
 ## `descriptor.res`
 
-Resolves to the built object.
+Synchronously access the resolved value, or `undefined` if still pending/error.
 
 ```ts
-const user = await descriptor.res
+if (descriptor.isPending) {
+  // wait for it...
+} else {
+  const user = descriptor.res!
+}
+```
+
+---
+
+## `descriptor.error`
+
+Stores any error thrown during `fetch()` or `build()`. Access after resolution to inspect failures:
+
+```ts
+try {
+  await descriptor.resPromise
+} catch (err) {
+  console.log(descriptor.error === err) // true
+}
+```
+
+---
+
+## `descriptor.isPending`
+
+Whether the descriptor is still fetching/building. Useful for UI loading states or conditional logic.
+
+```ts
+if (!descriptor.isPending && descriptor.res !== undefined) {
+  const user = descriptor.res
+}
+```
+
+---
+
+## `descriptor.invalidatedPromise`
+
+A promise that resolves after the descriptor is AND invalidated AND built.
+
+Useful for:
+
+* subscriptions cleanup
+* reactive systems
+* explicit resource disposal
+* dependency-driven rebuilds
+
+```ts
+const target = await descriptor.invalidatedPromise
+console.log(target, 'was just invalidated')
 ```
 
 ---
 
 ## `descriptor.invalidated`
 
-Resolves after the descriptor is invalidated.
-
-Useful for:
-
-* subscriptions
-* reactive systems
-* explicit resource disposal
-* dependency-driven rebuilds
+A boolean flag indicating whether the descriptor has been invalidated.
 
 ```ts
-descriptor.invalidated.then((target) => {
-  console.log(target, 'descriptor invalidated')
-})
+if (descriptor.invalidated) {
+  // descriptor was invalidated, may need to re-resolve
+}
 ```
 
 ---
 
-## `descriptor.garbageCollected`
+## `descriptor.onInvalidate(subscriber)`
 
-Resolves when the descriptor is garbage collected.
+Subscribes to invalidation events via `Subscribe` — returns an unsubscribe function.
 
 Useful for:
 
-* weak-resource cleanup
-* cache-adjacent systems
-* diagnostics
-* non-critical disposal logic
+* cleanup on external changes (websockets, stores)
+* reactive subscriptions tied to object lifecycle
+* non-blocking side effects that don't need the full promise flow
 
 ```ts
-descriptor.garbageCollected.then(() => {
-  console.log('descriptor collected')
+const unsub = descriptor.onInvalidate(() => {
+  console.log('descriptor invalidated')
 })
+
+// later...
+unsub() // stop listening
 ```
 
 ---
 
 ## `descriptor.invalidate()`
 
-Marks the descriptor as stale.
+Marks the descriptor as stale. Triggers cascading invalidation to dependents and fires all subscribers.
 
 Important:
 
-`resolver.invalidate(key)` is intended for cases where the underlying object became outdated because of external mutations or side effects.
-`descriptor.invalidate()` does not invalidate key always.
+`invalidate()` is intended for cases where the underlying object became outdated because of external mutations or side effects.
 
 Examples:
 
@@ -242,22 +287,20 @@ Examples:
 * server-side updates
 * invalidated subscriptions
 
-It is **NOT required** for garbage collection.
-
-If nothing references the descriptor anymore, it may still be collected naturally by the GC.
-
 ---
 
 # Resolver API
 
 ```ts
 export interface Resolver<KEY, DATA, T extends object> {
-  invalidateKey(key: KEY): void
-
-  resolve(
-    args: ResolveArgs<KEY, DATA>
-  ): Descriptor<T>
+  invalidateKey(key: KEY): void;
+  resolve(args: ResolveArgs<KEY, DATA>): Descriptor<T>;
 }
+
+type ResolveArgs<KEY, DATA> = KeyArgs<KEY> & (DataArgs<DATA> | {})
+
+type KeyArgs<KEY> = { key: KEY, self?: Descriptor<object> }
+type DataArgs<DATA> = { data: DATA }
 ```
 
 ---
@@ -328,9 +371,7 @@ Example:
 ```ts
 const tags = [...inputTags].sort()
 
-resolver.resolve({
-  key: { tags }
-})
+resolver.resolve({ key: { tags } })
 ```
 
 Otherwise they are treated as different keys.
@@ -355,11 +396,17 @@ function createResolver<KEY, DATA, T extends object>(
 type ClientRule<KEY, DATA, T extends object> = {
   fetch: (key: KEY) => Promise<DATA> | DATA
 
-  build: (
-    info: BuildInfo<KEY, DATA, T>
-  ) => Promise<T> | T
+  build: (info: BuildInfo<KEY, DATA, T>) => Promise<T> | T
+}
+
+interface BuildInfo<KEY, DATA, T extends object> {
+  key: KEY
+  data: DATA
+  self: Descriptor<T> // the descriptor being built — pass as parent to children
 }
 ```
+
+`BuildInfo` dependency tracking is done purely through `self`.
 
 ---
 
@@ -371,19 +418,23 @@ resolve(
 ): Descriptor<T>
 ```
 
+## Behavior with dependencies (parent-child tracking)
+
+Passing `self` links child descriptors under the current one. Dependencies are tracked automatically.
+
 ```ts
-type ResolveArgs<KEY, DATA> = {
-  key: KEY
-  data?: DATA
-  ctx?: IContext
-}
+const userDesc = resolver.resolve({ key }) // parent descriptor
+
+// inside build(), pass self as parent:
+childResolver.resolve({ 
+  key, 
+  self // ← tracks dependency graph automatically
+})
 ```
 
 ---
 
-## Behavior
-
-### With `data`
+## Behavior with `data` (skip fetch)
 
 ```ts
 resolver.resolve({
@@ -397,7 +448,7 @@ resolver.resolve({
 
 ---
 
-### Without `data`
+## Behavior without `data`
 
 ```ts
 resolver.resolve({
@@ -414,32 +465,11 @@ build(...)
    ↓
 cached descriptor
 ```
-
----
-
-# Dependency tracking
-
-Resolvers automatically build a dependency graph through shared `ctx`.
-
-```ts
-const user = userResolver.resolve({ key, ctx })
-
-const posts = postsResolver.resolve({ key, ctx })
-```
-
-Dependencies are recorded during `build()`.
-
-This enables:
-
-* cascading invalidation
-* cycle detection
-* dependency-aware rebuilds
-
 ---
 
 # Cascading invalidation
 
-If:
+If the dependency graph looks like:
 
 ```txt
 User -> Company -> Address
@@ -451,20 +481,30 @@ and `Company` is invalidated:
 companyResolver.invalidateKey(key)
 ```
 
-then dependent `User` descriptors are invalidated automatically.
-
-This guarantees graph consistency.
+then dependent `User` descriptors are automatically invalidated as well. This guarantees graph consistency across all levels of nesting.
 
 ---
 
 # Cycle detection
 
-`frontdi` detects:
+`frontdi` detects cycles at resolve time and throws typed errors instead of crashing with unhelpful stack traces:
 
 ## Self-reference
 
 ```txt
 A -> A
+```
+
+Throws `SelfReferenceError`:
+
+```ts
+try {
+  await resolver.resolve({ key, self }).resPromise
+} catch (err) {
+  if (err instanceof SelfReferenceError) {
+    console.log(err.node) // the node that references itself
+  }
+}
 ```
 
 ## Dependency cycles
@@ -473,16 +513,16 @@ A -> A
 A -> B -> A
 ```
 
-In those cases:
+Throws `DependencyCycleError`:
 
 ```ts
-await resolver.resolve(...).res
-```
-
-rejects with:
-
-```txt
-Cycle detected
+try {
+  await resolver.resolve({ key, self }).resPromise
+} catch (err) {
+  if (err instanceof DependencyCycleError) {
+    console.log(err.cycle) // array of nodes forming the cycle
+  }
+}
 ```
 
 ---
@@ -497,11 +537,10 @@ Repeated calls:
 resolver.resolve({ key })
 ```
 
-return the SAME descriptor instance until invalidation.
+return the **SAME descriptor instance** until invalidation.
 
 ```ts
 const d1 = resolver.resolve({ key: 1 })
-
 const d2 = resolver.resolve({ key: 1 })
 
 console.log(d1 === d2) // true
@@ -521,7 +560,7 @@ Behavior:
 
 * invalidates cached descriptor by key
 * removes it from cache
-* cascades invalidation to dependents
+* cascades invalidation to all dependents (children and descendants)
 * next `resolve()` rebuilds fresh state
 
 Example:
@@ -534,92 +573,25 @@ userResolver.invalidateKey(1)
 
 # Best practices
 
-## Always pass `ctx` inside `build()`
+## Pass `self` as parent in children resolves
+
+Inside `build()`, pass the descriptor's own reference (`self`) to child resolvers so dependencies are tracked automatically.
 
 ```ts
-childResolver.resolve({
-  key,
-  ctx,
-})
+childResolver.resolve({ key, self }) // ← always include this
 ```
-
-Without shared context, dependency tracking will not work.
-
----
 
 ## Prefer deterministic keys
 
 Good:
 
 ```ts
-{
-  page: 1,
-  sort: 'desc'
-}
+{ page: 1, sort: 'desc' }
 ```
 
 Better with arrays:
 
 ```ts
-{
-  tags: [...tags].sort()
-}
+{ tags: [...tags].sort() }
 ```
 
----
-
-## Use invalidation only for stale state
-
-`invalidate()` and `invalidateKey()` are for rebuilding stale objects after external changes.
-
-They are not lifecycle requirements for cleanup or memory release.
-
-Garbage collection works independently.
-
----
-
-# Example architecture
-
-```txt
-User
- ├── Company
- ├── Address
- │     └── Geo
- └── Posts
-       └── Comments
-```
-
-Each resolver composes others using shared `ctx`.
-
-`frontdi` tracks the graph automatically.
-
----
-
-# Use cases
-
-Perfect for:
-
-* frontend entity graphs
-* normalized async stores
-* SDK clients
-* reactive state systems
-* GraphQL-like composition
-* client-side repositories
-* dependency-aware caches
-* identity-mapped data layers
-
----
-
-# TypeScript notes
-
-```ts
-T extends object
-```
-
-is required because descriptors track object references internally.
-
----
-
-# License
-
-MIT

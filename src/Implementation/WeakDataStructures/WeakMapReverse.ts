@@ -1,4 +1,4 @@
-export class WeakMapReverse<KEY, T extends object> {
+export class WeakMapReverse<KEY, T extends object> implements Map<KEY, T> {
   private store = new Map<KEY, WeakRef<T>>();
   private registry = new FinalizationRegistry<KEY>((key) => {
     // Если WeakRef всё ещё жив (редкая ситуация при повторной регистрации),
@@ -75,4 +75,6 @@ export class WeakMapReverse<KEY, T extends object> {
       callbackfn.call(thisArg, value, key, this);
     }
   }
+
+  [Symbol.toStringTag] = "WeakMapReverse";
 }

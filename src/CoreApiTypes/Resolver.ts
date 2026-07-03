@@ -1,25 +1,11 @@
-import type { Data } from "./ClientRule"
-import type { IContext } from "./Common"
+import type { Descriptor } from "./Descriptor";
+
+type KeyArgs<KEY> = { key: KEY, self?: Descriptor<object> }
+type DataArgs<DATA> = { data: DATA }
+export type ResolveArgs<KEY, DATA> = KeyArgs<KEY> & (DataArgs<DATA> | {})
 
 
-type KeyArgs<KEY> = { key: KEY, ctx?: IContext }
-type DataArgs<DATA extends Data> = { data: DATA }
-export type ResolveArgs<KEY, DATA extends Data> = KeyArgs<KEY> & (DataArgs<DATA> | {})
-
-
-type Unsubscribe = () => void
-type Subscriber = () => void
-export type Subscribe = (subscriber: Subscriber) => Unsubscribe
-
-export type Invalidate = () => void
-export interface Descriptor<T> {
-  resPromise: Promise<T>
-  onInvalidate: Subscribe
-  invalidate: Invalidate
-  garbageCollected: Promise<void>,
-}
-
-export interface Resolver<KEY, DATA extends Data, T extends object> {
+export interface Resolver<KEY, DATA, T extends object> {
   invalidateKey(key: KEY): void;
   resolve(args: ResolveArgs<KEY, DATA>): Descriptor<T>;
 }

@@ -1,19 +1,21 @@
-import type { Data } from "../CoreApiTypes/ClientRule";
-import type { Descriptor, Subscribe } from "../CoreApiTypes/Resolver";
-import { DependencyGraph } from "./DepsTracking/Graph";
+import { DependencyCycleError, SelfReferenceError, type Descriptor, type Subscribe } from "../CoreApiTypes/Descriptor";
 
 import {
-  createGarbageCollectPromise,
   promiseWithResolvers,
   serialize,
 } from "./utils";
+import { IterableWeakSet } from "./WeakDataStructures/WeakSetIterable";
 
 
-export type DepsDescriptor<T extends object, DATA extends Data> = Descriptor<T> & {
-  onData(data: Data): DepsDescriptor<T, DATA>;
+
+
+export type DepsDescriptor<T extends object, DATA> = Descriptor<T> & {
+  onData(data: DATA): void;
   fetchData(fetch: () => Promise<DATA>): void;
-  graph: DependencyGraph<DepsDescriptor<object, Data>>;
-  invalidate(): void;
+  parents: IterableWeakSet<Descriptor<object>>
+  children: Set<Descriptor<object>>
+  addChild(child: DepsDescriptor<object, unknown>): void
+  checkForCycles(child: DepsDescriptor<object, unknown>): void
 };
 
 export const unAssigned = Symbol("unAssigned");
@@ -34,7 +36,7 @@ class Deferred<T> {
   }
 }
 
-class DataState<DATA extends Data> {
+class DataState<DATA> {
   private value: DATA | typeof unAssigned = unAssigned;
 
   pending(): boolean {
@@ -56,24 +58,24 @@ class DataState<DATA extends Data> {
 
     const current = this.value;
 
-    if (current instanceof Object && other instanceof Object) {
-      if ("equals" in current && "equals" in other) {
-        return current.equals(other);
-      }
-
-      return serialize(current) === serialize(other);
-    }
-
-    return current === other;
+    return serialize(current) === serialize(other);
   }
 }
 
 
 
-class Invalidatable {
+class Invalidatable<T extends object> {
+  readonly promise: Promise<T>
   private invalidated = false;
-
-  private subscribers = new Set<() => void>();
+  private readonly subscribers = new Set<() => void>();
+  private readonly resolve: (value: T | PromiseLike<T>) => void;
+  private readonly reject: (reason?: any) => void;
+  constructor(private resPromise: Promise<T>) {
+    const { promise, resolve, reject } = promiseWithResolvers<T>();
+    this.promise = promise;
+    this.resolve = resolve;
+    this.reject = reject;
+  }
 
   invalidate(): boolean {
     if (this.invalidated) {
@@ -88,33 +90,73 @@ class Invalidatable {
       } catch {}
     }
     this.subscribers.clear();
+
+    this.resPromise.then(this.resolve).catch(this.reject);
     return true;
   }
 
-  subscribe: Subscribe = callback => {
-    this.subscribers.add(callback);
 
+  readonly subscribe: Subscribe = callback => {
+    if (!this.invalidated){
+      this.subscribers.add(callback);
+    } else {
+      callback();
+    }
     return () => {
       this.subscribers.delete(callback);
     };
   };
 }
 
-export class DescriptorImpl<T extends object, DATA extends Data> implements DepsDescriptor<T, DATA> {
+export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T, DATA> {
 
   private readonly result = new Deferred<T>();
   private readonly state = new DataState<DATA>();
-  public readonly graph: DependencyGraph<DepsDescriptor<object, Data>> = new DependencyGraph<DepsDescriptor<object, Data>>(this);
-  private readonly invalidation = new Invalidatable();
   readonly resPromise = this.result.promise;
-  readonly garbageCollected: Promise<void>;
 
-  onInvalidate = this.invalidation.subscribe;
+  res: T | undefined;
+  error: unknown | undefined;
+  isPending: boolean = true;
+
+  invalidated: boolean = false;
+  private readonly invalidation = new Invalidatable(this.resPromise);
+  readonly invalidatedPromise = this.invalidation.promise;
+  readonly onInvalidate = this.invalidation.subscribe;
+
+  readonly parents = new IterableWeakSet<DepsDescriptor<object, unknown>>()
+  readonly children = new Set<DepsDescriptor<object, unknown>>()
 
   constructor(
     private readonly build: (data: DATA) => Promise<T>
   ) {
-    this.garbageCollected = createGarbageCollectPromise(this);
+    this.onInvalidate(() => {
+      this.invalidated = true;
+    });
+  }
+
+
+  checkForCycles(child: DepsDescriptor<object, unknown>): void {
+    if(child === this) {
+      throw new SelfReferenceError(this.resPromise);
+    }
+    for(const parent of this.parents){
+      try{
+        parent.checkForCycles(child);
+      }catch(e){
+        if(e instanceof DependencyCycleError){
+          const cycle = [...e.cycle];
+          cycle.pop();
+          cycle.push(this.resPromise);
+          cycle.push(child.resPromise);
+          throw new DependencyCycleError(cycle);
+        }
+      }
+    }
+  }
+  addChild(child: DepsDescriptor<object, unknown>): void {
+    this.checkForCycles(child);
+    this.children.add(child);
+    child.parents.add(this);
   }
 
   private buildResult(data: DATA): void {
@@ -122,28 +164,29 @@ export class DescriptorImpl<T extends object, DATA extends Data> implements Deps
       .then(result => {
         refs.set(result, this);
         this.result.resolve(result);
+        this.res = result;
+        this.isPending = false;
       })
       .catch(error => {
         this.result.reject(error);
+        this.isPending = false;
+        this.error = error;
         this.invalidate();
       });
   }
 
-  onData(data: DATA): DescriptorImpl<T, DATA> {
+  onData(data: DATA): void{
     if (this.state.pending()) {
       this.state.assign(data);
       this.buildResult(data);
-
-      return this;
+      return
     }
 
     if (this.state.similar(data)) {
-      return this;
+      return
     }
 
     this.invalidate();
-
-    return new DescriptorImpl(this.build).onData(data);
   }
 
   fetchData(fetch: () => Promise<DATA>): void {
@@ -158,17 +201,20 @@ export class DescriptorImpl<T extends object, DATA extends Data> implements Deps
           return;
         }
 
+        this.isPending = false;
+        this.error = error;
         this.result.reject(error);
         this.invalidate();
       });
   }
 
-  invalidate = (): void => {
+  readonly invalidate = (): void => {
     const shouldRun = this.invalidation.invalidate();
     if (!shouldRun) {
       return;
     }
-    this.graph.dependents.forEach(dependent => dependent.node.invalidate());
-    this.graph.clear();
+    this.parents.forEach(parent => parent.invalidate());
+    this.children.clear();
+    this.parents.clear();
   };
 }
