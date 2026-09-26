@@ -38,9 +38,10 @@ class Deferred<T> {
 
 class DataState<DATA> {
   private value: DATA | typeof unAssigned = unAssigned;
+  failed = false;
 
   pending(): boolean {
-    return this.value === unAssigned;
+    return this.value === unAssigned && !this.failed;
   }
 
   assign(data: DATA): void {
@@ -51,9 +52,17 @@ class DataState<DATA> {
     this.value = data;
   }
 
+  fail(): void {
+    this.failed = true;
+  }
+
   similar(other: DATA): boolean {
     if (this.pending()) {
       throw Error("pending");
+    }
+
+    if (this.failed) {
+      throw Error("failed");
     }
 
     const current = this.value;
@@ -139,6 +148,9 @@ export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T,
       try{
         parent.checkForCycles(child);
       }catch(e){
+        if(e instanceof SelfReferenceError){
+          throw e;
+        }
         if(e instanceof DependencyCycleError){
           const cycle = [...e.cycle];
           cycle.pop();
@@ -146,6 +158,7 @@ export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T,
           cycle.push(child.resPromise);
           throw new DependencyCycleError(cycle);
         }
+        throw e;
       }
     }
   }
@@ -178,6 +191,10 @@ export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T,
       return
     }
 
+    if (this.state.failed) {
+      return
+    }
+
     if (this.state.similar(data)) {
       return
     }
@@ -197,6 +214,7 @@ export class DescriptorImpl<T extends object, DATA> implements DepsDescriptor<T,
           return;
         }
 
+        this.state.fail();
         this.isPending = false;
         this.error = error;
         this.result.reject(error);

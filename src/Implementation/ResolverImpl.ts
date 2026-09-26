@@ -1,5 +1,6 @@
 import { type ClientRule } from "../CoreApiTypes/ClientRule";
 import type { Descriptor } from "../CoreApiTypes/Descriptor";
+import type { JsonKey } from "../CoreApiTypes/JsonKey";
 import { type ResolveArgs, type Resolver } from "../CoreApiTypes/Resolver";
 import { DescriptorImpl } from "./DescriptorImpl";
 import { type WeakObjectStore } from "./ObjectStore/WeakObjectStore";
@@ -7,7 +8,7 @@ import { WeakObjectStoreSerializableKey } from "./ObjectStore/WeakObjectStoreSer
 
 
 
-export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, DATA, T> {
+export class ResolverImpl<KEY extends JsonKey, DATA, T extends object> implements Resolver<KEY, DATA, T> {
   constructor(
     private rule: ClientRule<KEY, DATA, T>,
     private cache: WeakObjectStore<KEY, DescriptorImpl<T, DATA>> = new WeakObjectStoreSerializableKey<KEY, DescriptorImpl<T, DATA>>()
@@ -32,7 +33,6 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
     const build = (fetchedData: DATA) => Promise.resolve().then(() => this.rule.build({data: fetchedData, self, key}))
 
     if(cached){
-      parent?.checkForCycles(cached)
       if("data" in args){
         cached.onData(args.data)
         if(cached.invalidated){
@@ -54,18 +54,17 @@ export class ResolverImpl<KEY, DATA, T extends object> implements Resolver<KEY, 
       }else{
         self.fetchData(()=>Promise.resolve(this.rule.fetch(key)))
       }
+    }
+    
 
+    if(self !== cached){
       self.onInvalidate(() => {
         const cached = this.cache.get(key)
         if(cached === self) this.cache.delete(key)
       })
-    }
-    
-    parent?.addChild(self)
-
-    if(self !== cached){
       this.cache.set(key, self)
     }
+    parent?.addChild(self)
     
     return self
   }

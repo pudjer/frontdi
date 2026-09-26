@@ -1,11 +1,10 @@
 import { serialize } from "../utils";
+import type { JsonKey } from "../../CoreApiTypes/JsonKey";
 import { WeakMapReverse } from "../WeakDataStructures/WeakMapReverse";
 import type { WeakObjectStore } from "./WeakObjectStore";
-export interface KeySerializer<KEY, SRLZD> {
-	serialize(key: KEY): SRLZD
-}
 
-export class WeakObjectStoreSerializableKey<KEY, T extends object> implements WeakObjectStore<KEY, T> {
+
+export class WeakObjectStoreSerializableKey<KEY extends JsonKey, T extends object> implements WeakObjectStore<KEY, T> {
 	private readonly weakMapReverse = new WeakMapReverse<string, T>()
 
 	get(key: KEY): T | undefined {
